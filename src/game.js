@@ -14,6 +14,13 @@ import {
 } from './textures.js';
 
 const lerpAngle = (a, b, k) => a + angleDiff(b, a) * k;
+
+// Reused every frame: allocating Raycaster/Vector/Plane objects at 60 fps was
+// producing megabytes of garbage per match (and periodic GC hitches).
+const _ndc = new THREE.Vector2();
+const _ray = new THREE.Raycaster();
+const _aimPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -1.0);
+const _aimHit = new THREE.Vector3();
 const easeOut = (t) => 1 - Math.pow(1 - t, 3);
 
 const SOURCE_NAMES = {
@@ -122,12 +129,26 @@ export class Game {
     this.keys.clear();
     this.ui.showScreen('game');
     this.audio?.sfx('countdown');
-    this.stage.setQuality(this.ui.settings.quality);
-    this.degraded = false;
+    this.applyQuality(this.ui.settings.quality, this.ui.settings.renderScale);
     this.lowFpsTime = 0;
+    this.autoDegrades = 0;
   }
 
   setRoomCode(code) { this.currentRoomCode = code; }
+
+  /** Push a graphics preset through every layer that owns visual density. */
+  applyQuality(quality, renderScale) {
+    const q = quality || this.ui.settings.quality || 'high';
+    const scale = renderScale ?? this.ui.settings.renderScale ?? 1;
+    try { this.stage?.setQuality(q, scale); } catch (err) { console.warn('[quality] stage', err); }
+    try { this.fx?.setQuality(q); } catch (err) { console.warn('[quality] fx', err); }
+    try { this.arenaView?.setQuality(q); } catch (err) { console.warn('[quality] arena', err); }
+    // CSS switches off the expensive full-screen blend/backdrop filters
+    document.body.dataset.quality = q;
+    this.quality = q;
+    this.minimapInterval = q === 'low' ? 1 / 4 : q === 'med' ? 1 / 6 : 1 / 10;
+    return q;
+  }
 
   addPlayerVisual(info, x, z) {
     const parts = createMech(info.mech, info.color, info.name);
@@ -227,21 +248,24 @@ export class Game {
 
   updateAim() {
     if (!this.camera) return;
-    const ndc = new THREE.Vector2(
+    // The camera moves slowly and the mouse only changes on events, so the
+    // projected aim point is refreshed at most 30 times per second.
+    const now = this.time;
+    if (this._aimAt && now - this._aimAt < 1 / 30 && this._aimMouse === this.mouse.x + ':' + this.mouse.y) return;
+    this._aimAt = now;
+    this._aimMouse = this.mouse.x + ':' + this.mouse.y;
+    _ndc.set(
       (this.mouse.x / window.innerWidth) * 2 - 1,
       -(this.mouse.y / window.innerHeight) * 2 + 1,
     );
-    const ray = new THREE.Raycaster();
-    ray.setFromCamera(ndc, this.camera);
-    const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -1.0);
-    const hit = new THREE.Vector3();
-    const got = ray.ray.intersectPlane(plane, hit);
+    _ray.setFromCamera(_ndc, this.camera);
+    const got = _ray.ray.intersectPlane(_aimPlane, _aimHit);
     const v = this.selfVisual;
     if (!v) return;
     if (got) {
       const sx = v.rx ?? v.predicted?.x ?? v.x;
       const sz = v.rz ?? v.predicted?.z ?? v.z;
-      this.localAim = Math.atan2(hit.z - sz, hit.x - sx);
+      this.localAim = Math.atan2(_aimHit.z - sz, _aimHit.x - sx);
     }
   }
 
@@ -962,15 +986,26 @@ export class Game {
       this.fps = Math.round(this.fpsFrames / this.fpsAcc);
       this.fpsFrames = 0; this.fpsAcc = 0;
       this.ui.setFps(this.fps);
-      if (this.fps < 36 && this.ui.settings.quality === 'high') {
+      // Step the preset down one notch at a time (high -> med -> low) so a
+      // weak GPU keeps a playable frame rate without nuking the look at once.
+      const tiers = ['high', 'med', 'low'];
+      const current = this.ui.settings.quality || 'high';
+      const idx = tiers.indexOf(current);
+      if (this.fps < 40 && idx >= 0 && idx < tiers.length - 1) {
         this.lowFpsTime += 0.5;
-        if (this.lowFpsTime > 4 && !this.degraded) {
-          this.degraded = true;
-          this.stage.setQuality('low');
-          this.fx?.setQuality('low');
-          this.ui.toast('帧率偏低 · 已自动降低特效');
+        const limit = current === 'high' ? 3 : 4;
+        if (this.lowFpsTime >= limit) {
+          this.lowFpsTime = 0;
+          const next = tiers[idx + 1];
+          this.ui.settings.quality = next;
+          this.applyQuality(next);
+          try { this.ui.syncQualitySelect?.(next); } catch {}
+          this.ui.toast(`帧率 ${this.fps} · 已自动降到「${next === 'med' ? '中' : '低'}」画质`, 'err');
+          this.autoDegrades = (this.autoDegrades || 0) + 1;
         }
-      } else this.lowFpsTime = 0;
+      } else {
+        this.lowFpsTime = Math.max(0, this.lowFpsTime - 0.25);
+      }
     }
     this.updateAim();
     if (this.running && !this.ended) {
@@ -989,17 +1024,32 @@ export class Game {
     this.updateCamera(dt);
     this.updateDamagedOverlay(dt);
     if (this.fx) this.fx.update(dt);
-    if (this.arenaView) this.arenaView.update(dt, this.time, this.snap);
-    // crosshair follows mouse & local charge
+    if (this.arenaView) {
+      const ambEvery = this.quality === 'low' ? 2 : 1;
+      this.ambFrame = (this.ambFrame || 0) + 1;
+      if (this.ambFrame % ambEvery === 0) {
+        this.arenaView.update(dt * ambEvery, this.time, this.snap);
+      }
+    }
+    // crosshair follows mouse & local charge (30 Hz, only when it changed)
     if (this.running) {
-      this.ui.setCrosshair(this.mouse.x, this.mouse.y, {
-        charging: this.mouse.down && this.localCharge > 0.05,
-        charge: this.localCharge,
-        heat: this.selfData?.heat || 0,
-      });
+      this.crossAt = (this.crossAt || 0) + dt;
+      const charging = !!(this.mouse.down && this.localCharge > 0.05);
+      const hot = (this.selfData?.heat || 0) >= 70;
+      const sig = `${Math.round(this.mouse.x)},${Math.round(this.mouse.y)},${Math.round(this.localCharge * 12)},${charging},${hot}`;
+      if (this.crossAt >= 1 / 30 && sig !== this.crossSig) {
+        this.crossAt = 0;
+        this.crossSig = sig;
+        this.ui.setCrosshair(this.mouse.x, this.mouse.y, {
+          charging,
+          charge: this.localCharge,
+          heat: this.selfData?.heat || 0,
+        });
+      }
     }
     const now = performance.now();
-    if (this.snap && now - this.lastMinimap > 100) {
+    const mmEvery = (this.minimapInterval || 0.1) * 1000;
+    if (this.snap && now - this.lastMinimap > mmEvery) {
       this.lastMinimap = now;
       this.ui.drawMinimap(this.snap, this.myId, this.arena);
     }

@@ -157,7 +157,18 @@ ok(!app.ui.screenMenu.classList.contains('hidden'), 'leaving the lobby match ret
 
 // ---------------------------------------------------------------- results
 app.menuScene && app.menuScene.update(0.016);
-ok(app.stage.quality === 'low' || app.stage.quality === 'high', 'stage quality tracks settings', app.stage.quality);
+ok(['high', 'med', 'low'].includes(app.stage.quality), 'stage quality tracks settings', app.stage.quality);
+// in-game quality cycle button (high -> med -> low -> high)
+const qBefore = app.stage.quality;
+const qBtn = document.getElementById('btn-hud-quality');
+qBtn.onclick({ target: qBtn });
+const qAfter = app.stage.quality;
+ok(qAfter !== qBefore, 'HUD quality button switches presets', `${qBefore} → ${qAfter}`);
+ok(document.body.dataset.quality === qAfter, 'body reflects the preset for CSS', document.body.dataset.quality);
+ok(/画质/.test(document.getElementById('btn-hud-quality').textContent), 'HUD quality button shows the preset label', document.getElementById('btn-hud-quality').textContent);
+qBtn.onclick({ target: qBtn });
+qBtn.onclick({ target: qBtn });
+ok(app.stage.quality === qBefore, 'three clicks cycle back to the original preset', `${qBefore} → ${qAfter} → ${app.stage.quality}`);
 
 console.log(errors.length ? 'CONSOLE ERRORS:\n' + errors.join('\n') : 'no console errors');
 const pass = failures === 0 && errors.length === 0;

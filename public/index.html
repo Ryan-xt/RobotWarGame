@@ -244,11 +244,14 @@
     <div class="modal-card">
       <header><h3>系统设置</h3><button class="modal-x" data-close="modal-settings">✕</button></header>
       <div class="settings-list">
-        <label class="row-setting">画质 <select id="set-quality"><option value="high">高（辉光 / 阴影）</option><option value="low">低（省电 / 集显）</option></select></label>
+        <label class="row-setting">画质 <select id="set-quality"><option value="high">高（辉光 / 阴影 1024）</option><option value="med">中（半分辨率辉光 · 推荐）</option><option value="low">低（关辉光/阴影 · 集显）</option></select></label>
+        <label class="row-setting">帧率上限 <select id="set-fps"><option value="60">60 FPS（推荐）</option><option value="90">90 FPS</option><option value="144">144 FPS</option><option value="0">不限制（发热大）</option></select></label>
+        <label class="row-setting">渲染分辨率 <select id="set-res"><option value="1">100%（清晰）</option><option value="0.85">85%（省力）</option><option value="0.7">70%（高性能）</option><option value="0.55">55%（最流畅）</option></select></label>
         <label class="row-setting">主音量 <input id="set-volume" type="range" min="0" max="100" value="70"></label>
         <label class="row-setting">镜头震动 <input id="set-shake" type="checkbox" checked></label>
         <label class="row-setting">新手提示 <input id="set-hints" type="checkbox" checked></label>
         <div class="setting-extra">
+          <div><b>性能</b><p>卡顿时把「画质」调到中/低，或把「渲染分辨率」降到 85% / 70%；帧率低于 40 会自动降档。对局中也生效。</p></div>
           <div><b>控制</b><p>WASD 移动 · 鼠标瞄准 · 左键射击（长按蓄力）· 右键技能 · 空格冲刺 · E 道具 · Tab 记分板</p></div>
           <div><b>局域网</b><p>主机运行服务后，朋友在同一网络打开主机 IP 即可加入。无需账号，无互联网依赖。</p></div>
         </div>
@@ -298,6 +301,7 @@
         </div>
         <div class="hud-alive">
           <div id="hud-spectate" class="spectate hidden"></div>
+          <button id="btn-hud-quality" class="chip tiny" title="切换画质（高 / 中 / 低）">画质 中</button>
           <button id="btn-hud-leave" class="chip dark danger">退出战场</button>
         </div>
       </div>
@@ -390,7 +394,7 @@
       <div id="disconnect-overlay" class="disconnect hidden">
         <div class="dc-card"><div class="spinner"></div><b>信号中断</b><p>正在尝试重新连接主机…</p><span id="dc-hint"></span></div>
       </div>
-      <div id="fps-warning" class="fps-warning hidden">帧率偏低 · 已自动降低特效</div>
+      <div id="fps-warning" class="fps-warning hidden">帧率偏低 · 已自动降低画质（设置里可调回）</div>
     </div>
   </section>
 
@@ -528,6 +532,9 @@
         var el = document.getElementById('screen-' + n);
         return el && !el.classList.contains('hidden');
       }).join(',') || '(none)';
+      var stats = null;
+      try { stats = stage.getStats ? stage.getStats() : null; } catch (e) {}
+      var fpsLine = (app.game && app.game.fps) ? app.game.fps + ' FPS' : '-';
       return [
         '脚本启动 __bootOK      : ' + (window.__bootOK ? '是' : '否 ← 说明 app.js 没跑起来'),
         '游戏对象 __overload    : ' + (window.__overload ? '已创建' : '未创建'),
@@ -545,6 +552,15 @@
         '最后脚本错误           : ' + (lastErr || '无'),
         '页面地址               : ' + location.href,
         'UA                     : ' + navigator.userAgent,
+        '— 渲染统计 (renderer stats) —',
+        'FPS / 画质             : ' + fpsLine + ' / ' + (stage.quality || '-') + (stats && stats.mode === '2d' ? ' (2D)' : ''),
+        '分辨率倍率 / 缓冲      : ' + (stats ? (stats.pixelRatio || stats.dpr || '-') + ' / ' + (stats.buffer || '-') : '-'),
+        '绘制调用 draw calls    : ' + (stats && stats.calls != null ? stats.calls : '-'),
+        '三角面 / 点            : ' + (stats && stats.triangles != null ? stats.triangles + ' / ' + stats.points : '-'),
+        '几何体 / 纹理 / 着色器 : ' + (stats && stats.geometries != null ? stats.geometries + ' / ' + stats.textures + ' / ' + stats.programs : '-'),
+        '阴影 / 辉光            : ' + (stats ? (stats.shadows ? '开' : '关') + ' / ' + (stats.bloom ? '开' : '关') : '-'),
+        'GPU                    : ' + (stats ? (stats.adapter || '-') : '-'),
+        '自动降档次数           : ' + ((app.game && app.game.autoDegrades) || 0),
       ].join('\n');
     }
 

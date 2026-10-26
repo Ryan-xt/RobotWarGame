@@ -34,7 +34,18 @@ export class Stage2D {
     Object.assign(this, opts);
   }
 
-  setQuality(q) { this.quality = q; }
+  setQuality(q, renderScale = 1) {
+    this.quality = q;
+    this.renderScale = renderScale;
+  }
+
+  getStats() {
+    return {
+      calls: null, triangles: null, dpr: this.dpr,
+      buffer: `${this.canvas.width}×${this.canvas.height}`,
+      shadows: false, bloom: false, adapter: 'canvas2d', mode: '2d',
+    };
+  }
 
   setActive() { /* no scene graph in 2D mode */ }
 

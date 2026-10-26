@@ -714,3 +714,23 @@ button { cursor: pointer; }
   0% { transform: scale(.6); opacity: 1; }
   100% { transform: scale(4.2); opacity: 0; }
 }
+
+/* ------------------------------------------------- graphics presets (CSS side)
+   Full-screen blend modes and backdrop-filter blur cost real GPU time on
+   integrated chips; the low preset turns them off for good. */
+body[data-quality="low"] #grain { display: none; }
+body[data-quality="low"] .menu-scan,
+body[data-quality="low"] .sandstorm-overlay { mix-blend-mode: normal; }
+body[data-quality="low"] .death-overlay,
+body[data-quality="low"] .disconnect,
+body[data-quality="low"] .modal,
+body[data-quality="low"] #boot-error,
+body[data-quality="low"] #screen-fade { backdrop-filter: none; }
+body[data-quality="low"] .hud-clock .time,
+body[data-quality="low"] .heat-value { text-shadow: none; }
+body[data-quality="med"] #grain { opacity: .03; }
+body[data-quality="med"] .death-overlay,
+body[data-quality="med"] .disconnect,
+body[data-quality="med"] .modal { backdrop-filter: blur(2px); }
+/* never animate overlays that are idle */
+body[data-quality="low"] .countdown { background: rgba(0,0,0,.35); }

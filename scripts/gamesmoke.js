@@ -19,6 +19,7 @@ const stage = {
   quality: 'low',
   active: null,
   setQuality() {},
+  getStats() { return { calls: 10, triangles: 100, points: 10, geometries: 1, textures: 1, programs: 1, pixelRatio: 1, buffer: '1×1', shadows: false, bloom: false }; },
   setActive(scene, camera) { this.active = { scene, camera }; },
   render() {},
 };

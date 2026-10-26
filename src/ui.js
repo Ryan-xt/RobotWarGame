@@ -2,7 +2,24 @@ import { MECHS, MECH_LIST, mechOf } from '../shared/mechs.js';
 import { PLAYER_COLORS, ITEM_TYPES, EVENT_META, BULLET } from '../shared/constants.js';
 import { iconTexture } from './textures.js';
 
-const $ = (id) => document.getElementById(id);
+// Memoised lookups: the HUD touches ~40 nodes twenty times per second, and
+// getElementById/querySelector showed up as the largest cost in the profiler.
+const _elCache = new Map();
+const $ = (id) => {
+  let el = _elCache.get(id);
+  if (el !== undefined && (el === null || el.isConnected !== false)) return el;
+  el = document.getElementById(id);
+  if (el) _elCache.set(id, el);
+  return el;
+};
+const _qCache = new Map();
+const q = (sel) => {
+  let el = _qCache.get(sel);
+  if (el !== undefined && (el === null || el.isConnected !== false)) return el;
+  el = document.querySelector(sel);
+  if (el) _qCache.set(sel, el);
+  return el;
+};
 const modeLabel = (m) => ({ ffa: '自由混战', '2v2': '2v2 队伍', '3v3': '3v3 队伍', '4v4': '4v4 队伍' }[m] || m);
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const fmtTime = (s) => {
@@ -42,7 +59,7 @@ export class UI {
     this.tutorialTimer = 0;
     this.lobbyChat = [];
     this.gameChat = [];
-    this.settings = { volume: 70, quality: 'high', shake: true, hints: true };
+    this.settings = { volume: 70, quality: 'med', renderScale: 1, maxFps: 60, shake: true, hints: true };
     this.scoreboardOpen = false;
     this.resultData = null;
     this.deathActive = false;
@@ -160,6 +177,7 @@ export class UI {
     tap('btn-connect-ws', () => h.onConnectWs?.($('ws-url').value.trim()));
     tap('btn-save-settings', () => { this.saveSettings(); });
     tap('btn-hud-leave', () => h.onLeave?.());
+    tap('btn-hud-quality', () => h.onCycleQuality?.());
     tap('btn-rematch', () => h.onRematch?.());
     tap('btn-to-lobby', () => h.onToLobby?.());
     tap('btn-results-leave', () => h.onLeave?.());
@@ -195,6 +213,10 @@ export class UI {
       });
     }
     $('set-quality').addEventListener('change', () => { this.settings.quality = $('set-quality').value; });
+    const resSel = $('set-res');
+    if (resSel) resSel.addEventListener('change', () => { this.settings.renderScale = Number(resSel.value) || 1; });
+    const fpsSel = $('set-fps');
+    if (fpsSel) fpsSel.addEventListener('change', () => { this.settings.maxFps = Number(fpsSel.value); });
     $('set-volume').addEventListener('input', () => { this.settings.volume = Number($('set-volume').value); this.audio?.setVolume(this.settings.volume / 100); });
     $('set-shake').addEventListener('change', () => { this.settings.shake = $('set-shake').checked; });
     $('set-hints').addEventListener('change', () => { this.settings.hints = $('set-hints').checked; });
@@ -325,14 +347,29 @@ export class UI {
   closeAllModals() { document.querySelectorAll('.modal').forEach((m) => m.classList.add('hidden')); }
 
   loadSettingsToUI() {
-    $('set-quality').value = this.settings.quality;
+    const q = $('set-quality');
+    if (q) q.value = this.settings.quality;
+    const rs = $('set-res');
+    if (rs) rs.value = String(this.settings.renderScale ?? 1);
+    const fp = $('set-fps');
+    if (fp) fp.value = String(this.settings.maxFps ?? 60);
     $('set-volume').value = this.settings.volume;
     $('set-shake').checked = this.settings.shake;
     $('set-hints').checked = this.settings.hints;
   }
 
+  /** Keep the settings dropdown in sync when quality auto-degrades mid-match. */
+  syncQualitySelect(quality) {
+    const q = $('set-quality');
+    if (q) q.value = quality;
+  }
+
   saveSettings() {
     this.settings.quality = $('set-quality').value;
+    const rs = $('set-res');
+    if (rs) this.settings.renderScale = Number(rs.value) || 1;
+    const fp = $('set-fps');
+    if (fp) this.settings.maxFps = Number(fp.value);
     this.settings.volume = Number($('set-volume').value);
     this.settings.shake = $('set-shake').checked;
     this.settings.hints = $('set-hints').checked;
@@ -345,6 +382,7 @@ export class UI {
   applySettings(settings) {
     this.settings = { ...this.settings, ...settings };
     this.loadSettingsToUI();
+    document.body.dataset.quality = this.settings.quality || 'med';
   }
 
   toggleAudio() {
@@ -489,6 +527,14 @@ export class UI {
     $('minimap-size').textContent = arena ? arena.size + 'm' : '';
     if (arena) this.drawMinimap(null, null, arena);
     this.setItemState(null);
+    this._ammoKey = null;
+    this._buffHtml = null;
+    this._heatShown = null;
+    this._heatState = null;
+    this._skillLabel = null;
+    this._skillP = null;
+    this._dashP = null;
+    this._timeText = null;
     this.showScreen('game');
   }
 
@@ -496,16 +542,30 @@ export class UI {
     if (!snap) return;
     this.lastSnapshot = snap;
     const timeLeft = snap.timeLeft ?? 0;
-    $('hud-time').textContent = fmtTime(timeLeft);
+    // DOM writes are the most expensive part of the HUD: skip unchanged nodes.
+    const timeText = fmtTime(timeLeft);
+    if (timeText !== this._timeText) {
+      this._timeText = timeText;
+      $('hud-time').textContent = timeText;
+    }
     const warn = timeLeft <= 30;
-    $('hud-time').className = 'time' + (timeLeft <= 10 ? ' danger' : warn ? ' warn' : '');
+    const timeClass = 'time' + (timeLeft <= 10 ? ' danger' : warn ? ' warn' : '');
+    if (timeClass !== this._timeClass) {
+      this._timeClass = timeClass;
+      $('hud-time').className = timeClass;
+    }
     const phase = snap.phase === 'countdown' ? '核心同步' : snap.storm ? '电磁风暴' : timeLeft <= 30 ? '最后 30 秒' : '混战进行中';
-    $('hud-phase').textContent = phase;
+    if (phase !== this._phaseText) {
+      this._phaseText = phase;
+      $('hud-phase').textContent = phase;
+    }
     if (snap.teamScores) {
       const el = $('hud-teamscore');
       el.classList.remove('hidden');
-      el.innerHTML = `<i style="color:var(--cyan)">蓝队 ${(snap.teamScores[0] || 0).toFixed(1)}</i><i style="color:var(--amber)">橙队 ${(snap.teamScores[1] || 0).toFixed(1)}</i>`;
-    } else {
+      const html = `<i style="color:var(--cyan)">蓝队 ${(snap.teamScores[0] || 0).toFixed(1)}</i><i style="color:var(--amber)">橙队 ${(snap.teamScores[1] || 0).toFixed(1)}</i>`;
+      if (html !== this._teamHtml) { this._teamHtml = html; el.innerHTML = html; }
+    } else if (this._teamHtml !== null) {
+      this._teamHtml = null;
       $('hud-teamscore').classList.add('hidden');
     }
     if (self) {
@@ -549,11 +609,15 @@ export class UI {
     const heat = clamp(self.heat || 0, 0, 100);
     const state = heat >= 90 ? '临界' : heat >= 70 ? '危险' : heat >= 40 ? '升温' : '安全';
     const color = heat >= 90 ? '#ff4b3a' : heat >= 70 ? '#ff7a2e' : heat >= 40 ? '#ffcf5a' : '#46d9ff';
-    document.documentElement.style.setProperty('--heat', color);
-    $('heat-value').textContent = Math.round(heat);
-    $('heat-state').textContent = state;
+    if (color !== this._heatColor) {
+      this._heatColor = color;
+      document.documentElement.style.setProperty('--heat', color);
+    }
+    const shown = Math.round(heat);
+    if (shown !== this._heatShown) { this._heatShown = shown; $('heat-value').textContent = shown; }
+    if (state !== this._heatState) { this._heatState = state; $('heat-state').textContent = state; }
     $('heat-fill').style.width = heat + '%';
-    const block = document.querySelector('.heat-block');
+    const block = q('.heat-block');
     block.classList.toggle('critical', heat >= 90);
     block.classList.toggle('warm', heat >= 70 && heat < 90);
     $('heat-note').textContent = heat >= 90 ? '短路倒计时 · 立刻冲刺去散热区或按 E 冷却'
@@ -565,29 +629,48 @@ export class UI {
   }
 
   updateAmmo(self) {
-    const pips = $('ammo-pips').children;
-    for (let i = 0; i < pips.length; i++) {
-      pips[i].classList.toggle('on', i < (self.ammo || 0));
-      pips[i].classList.toggle('hot', !!self.reloading && i % 2 === 0);
-    }
+    if (!this._pips) this._pips = [...$('ammo-pips').children];
+    const ammo = self.ammo || 0;
     const reloading = (self.reloading || 0) > 0;
-    $('reload-bar').classList.toggle('active', reloading);
+    const key = `${ammo}:${reloading}`;
+    if (key !== this._ammoKey) {
+      this._ammoKey = key;
+      for (let i = 0; i < this._pips.length; i++) {
+        this._pips[i].classList.toggle('on', i < ammo);
+        this._pips[i].classList.toggle('hot', reloading && i % 2 === 0);
+      }
+      $('reload-bar').classList.toggle('active', reloading);
+      $('ammo-label').textContent = reloading ? '换弹中' : `${ammo}/${BULLET.magSize}`;
+    }
     if (reloading) $('reload-bar').firstElementChild.style.width = clamp((1 - self.reloading / 1.25) * 100, 0, 100) + '%';
-    $('ammo-label').textContent = reloading ? '换弹中' : `${self.ammo}/${BULLET.magSize}`;
   }
 
   updateAbilities(self, snap) {
     const mech = mechOf(self.mech);
     const skillCd = self.skillCd || 0;
-    const p = clamp(100 - (skillCd / (this.skillMax || 1)) * 100, 0, 100);
-    $('ab-skill').querySelector('.ab-ring').style.setProperty('--p', p);
-    $('ab-skill').querySelector('.ab-ring').style.setProperty('--c', skillCd > 0 ? '#7a7568' : 'var(--amber)');
-    $('ab-skill-name').textContent = skillCd > 0.3 ? `${mech.skill.name} ${skillCd.toFixed(1)}` : mech.skill.name;
+    const p = Math.round(clamp(100 - (skillCd / (this.skillMax || 1)) * 100, 0, 100));
+    if (p !== this._skillP) {
+      this._skillP = p;
+      q('#ab-skill .ab-ring')?.style.setProperty('--p', p);
+      q('#ab-skill .ab-ring')?.style.setProperty('--c', skillCd > 0 ? '#7a7568' : 'var(--amber)');
+    }
+    const skillLabel = skillCd > 0.3 ? `${mech.skill.name} ${skillCd.toFixed(1)}` : mech.skill.name;
+    if (skillLabel !== this._skillLabel) {
+      this._skillLabel = skillLabel;
+      $('ab-skill-name').textContent = skillLabel;
+    }
     const dashCd = self.dashCd || 0;
-    $('ab-dash').querySelector('.ab-ring').style.setProperty('--p', clamp(100 - (dashCd / 1.2) * 100, 0, 100));
-    $('ab-dash').querySelector('.ab-ring').style.setProperty('--c', dashCd > 0 ? '#7a7568' : 'var(--text)');
+    const dp = Math.round(clamp(100 - (dashCd / 1.2) * 100, 0, 100));
+    if (dp !== this._dashP) {
+      this._dashP = dp;
+      q('#ab-dash .ab-ring')?.style.setProperty('--p', dp);
+      q('#ab-dash .ab-ring')?.style.setProperty('--c', dashCd > 0 ? '#7a7568' : 'var(--text)');
+    }
     this.setItemState(self.item);
-    $('ab-item').classList.toggle('empty', !self.item);
+    if (this._itemEmpty !== !self.item) {
+      this._itemEmpty = !self.item;
+      $('ab-item').classList.toggle('empty', !self.item);
+    }
   }
 
   setItemState(type) {
@@ -597,11 +680,11 @@ export class UI {
       const it = ITEM_TYPES[type];
       $('item-icon').src = iconDataUrl(it.icon || type, it.color);
       $('item-name').textContent = it.name;
-      $('ab-item').querySelector('.ab-ring').style.setProperty('--c', it.color);
+      q('#ab-item .ab-ring')?.style.setProperty('--c', it.color);
     } else {
       $('item-icon').src = iconDataUrl('box', '#5a5a52');
       $('item-name').textContent = '空槽';
-      $('ab-item').querySelector('.ab-ring').style.setProperty('--c', '#5a5a52');
+      q('#ab-item .ab-ring')?.style.setProperty('--c', '#5a5a52');
     }
   }
 
@@ -614,7 +697,11 @@ export class UI {
     if (self.channel > 0) buffs.push(`<span class="buff cooling">冷却中 ${self.channel.toFixed(1)}s</span>`);
     if (self.stunned) buffs.push('<span class="buff stun">短路麻痹</span>');
     if (self.fuse > 0) buffs.push(`<span class="buff overclock">引信 ${self.fuse.toFixed(1)}s</span>`);
-    $('buff-row').innerHTML = buffs.join('');
+    const html = buffs.join('');
+    if (html !== this._buffHtml) {
+      this._buffHtml = html;
+      $('buff-row').innerHTML = html;
+    }
   }
 
   updateDeath(self, snap) {
@@ -651,6 +738,14 @@ export class UI {
   }
 
   setPing(ms) { this.ping = ms; $('hud-ping').textContent = ms + ' ms'; }
+  setQualityLabel(quality) {
+    const el = $('btn-hud-quality');
+    if (!el) return;
+    const label = { high: '高', med: '中', low: '低' }[quality] || '中';
+    if (el.textContent !== '画质 ' + label) el.textContent = '画质 ' + label;
+    el.dataset.quality = quality;
+  }
+
   setFps(fps) {
     this.fps = fps;
     $('hud-fps').textContent = fps + ' FPS';
@@ -659,13 +754,25 @@ export class UI {
 
   setCrosshair(x, y, state = {}) {
     if (!this.screenGame.classList.contains('active')) return;
-    const ch = $('crosshair');
-    ch.style.left = x + 'px';
-    ch.style.top = y + 'px';
-    ch.classList.toggle('charging', !!state.charging);
-    ch.classList.toggle('hot', (state.heat || 0) >= 70);
-    const charge = clamp(state.charge || 0, 0, 1);
-    ch.querySelector('.ch-charge').style.setProperty('--c', charge * 100);
+    const ch = $('crosshair') || q('.crosshair');
+    if (!ch) return;
+    const rx = Math.round(x);
+    const ry = Math.round(y);
+    if (rx !== this._chX || ry !== this._chY) {
+      this._chX = rx; this._chY = ry;
+      ch.style.left = rx + 'px';
+      ch.style.top = ry + 'px';
+    }
+    const charging = !!state.charging;
+    const hot = (state.heat || 0) >= 70;
+    if (charging !== this._chCharging) { this._chCharging = charging; ch.classList.toggle('charging', charging); }
+    if (hot !== this._chHot) { this._chHot = hot; ch.classList.toggle('hot', hot); }
+    const charge = Math.round(clamp(state.charge || 0, 0, 1) * 100);
+    if (charge !== this._chCharge) {
+      this._chCharge = charge;
+      const el = this._chChargeEl || (this._chChargeEl = q('.ch-charge'));
+      el?.style.setProperty('--c', charge);
+    }
   }
   hideCrosshair() { $('crosshair').classList.remove('charging', 'hot', 'dead'); }
 
@@ -747,38 +854,61 @@ export class UI {
   drawMinimap(snap, youId, arena = this.arena) {
     if (!arena) return;
     const c = $('minimap');
+    if (!c) return;
     const g = c.getContext('2d');
+    if (!g) return;
     const W = c.width, H = c.height;
-    g.clearRect(0, 0, W, H);
     const pad = 12;
     const half = arena.half || arena.size / 2;
     const k = (W - pad * 2) / (half * 2);
     const px = (x) => W / 2 + x * k;
     const pz = (z) => H / 2 + z * k;
-    g.fillStyle = '#0a0d0d'; g.fillRect(0, 0, W, H);
-    g.strokeStyle = 'rgba(201,186,154,0.08)'; g.lineWidth = 1;
-    for (let i = 1; i < 4; i++) {
-      g.beginPath(); g.moveTo(pad + (W - pad * 2) * i / 4, pad); g.lineTo(pad + (W - pad * 2) * i / 4, H - pad); g.stroke();
-      g.beginPath(); g.moveTo(pad, pad + (H - pad * 2) * i / 4); g.lineTo(W - pad, pad + (H - pad * 2) * i / 4); g.stroke();
+
+    // ---- static layer: rendered once per arena/canvas size, then blitted.
+    const key = `${arena.seed || 0}:${arena.size}:${W}x${H}`;
+    let base = this._mmBase;
+    if (!base || this._mmKey !== key) {
+      base = document.createElement('canvas');
+      base.width = W; base.height = H;
+      const b = base.getContext('2d');
+      if (b) {
+        b.fillStyle = '#0a0d0d'; b.fillRect(0, 0, W, H);
+        b.strokeStyle = 'rgba(201,186,154,0.08)'; b.lineWidth = 1;
+        for (let i = 1; i < 4; i++) {
+          b.beginPath(); b.moveTo(pad + (W - pad * 2) * i / 4, pad); b.lineTo(pad + (W - pad * 2) * i / 4, H - pad); b.stroke();
+          b.beginPath(); b.moveTo(pad, pad + (H - pad * 2) * i / 4); b.lineTo(W - pad, pad + (H - pad * 2) * i / 4); b.stroke();
+        }
+        b.strokeStyle = 'rgba(255,176,46,0.35)'; b.lineWidth = 1.5;
+        b.strokeRect(px(-half), pz(-half), half * 2 * k, half * 2 * k);
+        for (const a of arena.acids) {
+          b.fillStyle = 'rgba(120,220,50,0.16)'; b.strokeStyle = 'rgba(157,255,87,0.5)';
+          b.beginPath(); b.arc(px(a.x), pz(a.z), a.r * k, 0, 7); b.fill(); b.stroke();
+        }
+        for (const a of arena.coolers) {
+          b.fillStyle = 'rgba(70,217,255,0.14)'; b.strokeStyle = 'rgba(70,217,255,0.55)';
+          b.beginPath(); b.arc(px(a.x), pz(a.z), a.r * k, 0, 7); b.fill(); b.stroke();
+        }
+        b.strokeStyle = 'rgba(70,217,255,0.65)'; b.lineWidth = 1;
+        for (const p of arena.plates) {
+          b.beginPath(); b.arc(px(p.x), pz(p.z), p.r * k, 0, 7); b.stroke();
+        }
+        for (const t of arena.towers) {
+          b.strokeStyle = 'rgba(255,208,90,0.35)';
+          b.beginPath(); b.arc(px(t.x), pz(t.z), t.zapR * k, 0, 7); b.stroke();
+        }
+        for (const p of arena.pads) {
+          b.fillStyle = p.center ? 'rgba(255,91,200,0.6)' : 'rgba(255,176,46,0.4)';
+          b.beginPath(); b.arc(px(p.x), pz(p.z), 2, 0, 7); b.fill();
+        }
+      }
+      this._mmBase = base;
+      this._mmKey = key;
     }
-    g.strokeStyle = 'rgba(255,176,46,0.35)'; g.lineWidth = 1.5;
-    g.strokeRect(px(-half), pz(-half), half * 2 * k, half * 2 * k);
-    // acids
-    for (const a of arena.acids) {
-      g.fillStyle = 'rgba(120,220,50,0.16)'; g.strokeStyle = 'rgba(157,255,87,0.5)';
-      g.beginPath(); g.arc(px(a.x), pz(a.z), a.r * k, 0, 7); g.fill(); g.stroke();
-    }
-    // coolers
-    for (const a of arena.coolers) {
-      g.fillStyle = 'rgba(70,217,255,0.14)'; g.strokeStyle = 'rgba(70,217,255,0.55)';
-      g.beginPath(); g.arc(px(a.x), pz(a.z), a.r * k, 0, 7); g.fill(); g.stroke();
-    }
-    // plates
-    for (const p of arena.plates) {
-      g.strokeStyle = 'rgba(70,217,255,0.65)'; g.lineWidth = 1;
-      g.beginPath(); g.arc(px(p.x), pz(p.z), p.r * k, 0, 7); g.stroke();
-    }
-    // walls
+
+    g.clearRect(0, 0, W, H);
+    if (base) g.drawImage(base, 0, 0);
+
+    // ---- dynamic layer -----------------------------------------------------
     const wallState = new Map((snap?.walls || []).map((w) => [w.id, w]));
     for (const w of arena.walls) {
       const st = wallState.get(w.id);
@@ -786,24 +916,15 @@ export class UI {
       g.fillStyle = alive ? 'rgba(210,196,160,0.4)' : 'rgba(90,80,70,0.25)';
       g.fillRect(px(w.x - w.w / 2), pz(w.z - w.h / 2), w.w * k, w.h * k);
     }
-    // towers
     for (const t of arena.towers) {
       const ts = snap?.towers?.find((x) => x.id === t.id);
       g.fillStyle = ts?.charge > 0.2 ? '#ffd05a' : '#8a7a55';
       g.beginPath(); g.arc(px(t.x), pz(t.z), Math.max(2, t.r * k), 0, 7); g.fill();
-      g.strokeStyle = 'rgba(255,208,90,0.35)';
-      g.beginPath(); g.arc(px(t.x), pz(t.z), t.zapR * k, 0, 7); g.stroke();
-    }
-    // pads & items
-    for (const p of arena.pads) {
-      g.fillStyle = p.center ? 'rgba(255,91,200,0.6)' : 'rgba(255,176,46,0.4)';
-      g.beginPath(); g.arc(px(p.x), pz(p.z), 2, 0, 7); g.fill();
     }
     for (const it of snap?.items || []) {
       g.fillStyle = ITEM_TYPES[it.type]?.color || '#ffb02e';
       g.beginPath(); g.arc(px(it.x), pz(it.z), 2.6, 0, 7); g.fill();
     }
-    // zones
     for (const z of snap?.zones || []) {
       g.strokeStyle = z.type === 'storm' ? 'rgba(90,220,255,0.8)' : 'rgba(157,255,87,0.55)';
       g.fillStyle = z.type === 'storm' ? 'rgba(70,217,255,0.1)' : 'rgba(120,220,50,0.08)';
@@ -814,7 +935,6 @@ export class UI {
       g.beginPath(); g.arc(px(m.x), pz(m.z), m.r * k, 0, 7); g.stroke();
       g.beginPath(); g.moveTo(px(m.x) - 4, pz(m.z)); g.lineTo(px(m.x) + 4, pz(m.z)); g.stroke();
     }
-    // players
     for (const p of snap?.players || []) {
       const x = px(p.x), z = pz(p.z);
       if (!p.alive) {
@@ -835,15 +955,14 @@ export class UI {
         g.beginPath(); g.moveTo(x, z); g.lineTo(x + Math.cos(p.aim) * 9, z + Math.sin(p.aim) * 9); g.stroke();
       }
     }
-    // airdrop
     if (snap?.airdrop) {
       g.strokeStyle = '#ff5bc8'; g.setLineDash([3, 3]);
       g.beginPath(); g.arc(px(snap.airdrop.x), pz(snap.airdrop.z), 10, 0, 7); g.stroke();
       g.setLineDash([]);
     }
+    this._mmDraws = (this._mmDraws || 0) + 1;
   }
 
-  // ---------------------------------------------------------------- results
   showResults(result, youId, room, isHost = false) {
     if (!result) return;
     this.resultData = result;

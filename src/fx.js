@@ -189,6 +189,7 @@ export class Fx {
   constructor(scene, quality = 'high') {
     this.scene = scene;
     this.quality = quality;
+    this.density = quality === 'low' ? 0.5 : quality === 'med' ? 0.75 : 1;
     this.sparks = new ParticleSystem(scene, quality === 'low' ? 500 : 900, sparkTexture(), THREE.AdditiveBlending, 0.22);
     this.smoke = new ParticleSystem(scene, quality === 'low' ? 160 : 300, smokeTexture(), THREE.NormalBlending, 1.6);
     this.rings = new RingPool(scene, 36);
@@ -234,11 +235,12 @@ export class Fx {
 
   setQuality(q) {
     this.quality = q;
+    this.density = q === 'low' ? 0.5 : q === 'med' ? 0.75 : 1;
     this.sparks.mat.uniforms.globalAlpha.value = q === 'low' ? 0.8 : 1;
   }
 
   sparkBurst(x, y, z, color, n = 14, speed = 5, size = 1, life = 0.6, opts = {}) {
-    const count = this.quality === 'low' ? Math.ceil(n * 0.6) : n;
+    const count = Math.ceil(n * (this.density ?? 1));
     for (let i = 0; i < count; i++) {
       const a = Math.random() * Math.PI * 2;
       const v = speed * (0.3 + Math.random() * 0.7);
@@ -255,7 +257,7 @@ export class Fx {
   }
 
   smokePuff(x, y, z, n = 6, color = '#8b8074', size = 1.4, life = 1.6, speed = 0.8) {
-    const count = this.quality === 'low' ? Math.ceil(n * 0.6) : n;
+    const count = Math.ceil(n * (this.density ?? 1));
     for (let i = 0; i < count; i++) {
       const a = Math.random() * Math.PI * 2;
       const v = speed * (0.3 + Math.random() * 0.7);

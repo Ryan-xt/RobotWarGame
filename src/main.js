@@ -23,18 +23,30 @@ const profile = loadJSON(LS_PROFILE, {
   mech: 'assault',
 });
 if (!colorIds.includes(profile.colorId)) profile.colorId = 'orange';
-const settings = loadJSON(LS_SETTINGS, { volume: 70, quality: 'high', shake: true, hints: true });
+const settings = loadJSON(LS_SETTINGS, { volume: 70, quality: 'med', renderScale: 1, maxFps: 60, shake: true, hints: true });
+if (!['high', 'med', 'low'].includes(settings.quality)) settings.quality = 'med';
+if (typeof settings.renderScale !== 'number') settings.renderScale = 1;
+if (typeof settings.maxFps !== 'number') settings.maxFps = 60;
+
+// URL overrides for weak machines / preview panels:
+//   ?quality=low  ?scale=0.7  ?noaudio=1
+const params = new URLSearchParams(location.search);
+const qParam = params.get('quality');
+if (qParam && ['high', 'med', 'low'].includes(qParam)) settings.quality = qParam;
+const sParam = Number(params.get('scale'));
+if (sParam && sParam >= 0.4 && sParam <= 1) settings.renderScale = sParam;
 
 const canvas = document.getElementById('stage');
 let stage;
 try {
-  stage = createStage(canvas, settings.quality);
+  stage = createStage(canvas, settings.quality, settings.renderScale);
 } catch (err) {
   window.__bootShowError?.('渲染器初始化失败', err.message, err.stack);
   throw err;
 }
 const is2D = stage.is3D === false;
-if (is2D) settings.quality = 'low';
+if (is2D) { settings.quality = 'low'; settings.renderScale = 1; }
+document.body.dataset.quality = settings.quality;
 const audio = new AudioSys();
 // Escape hatch for machines with broken audio drivers: ?noaudio=1
 if (/[?&]noaudio=1/.test(location.search)) audio.enabled = false;
@@ -120,8 +132,10 @@ const ui = new UI({
     onSettingsSave: (s) => {
       Object.assign(settings, s);
       saveJSON(LS_SETTINGS, settings);
-      stage.setQuality(is2D ? 'low' : settings.quality);
+      stage.setQuality(is2D ? 'low' : settings.quality, settings.renderScale);
+      if (game.running) game.applyQuality(settings.quality, settings.renderScale);
       ui.applySettings(settings);
+      document.body.dataset.quality = settings.quality;
       audio.setVolume(settings.volume / 100);
       if (game.running) {
         game.stage?.setQuality(is2D ? 'low' : settings.quality);
@@ -130,11 +144,14 @@ const ui = new UI({
       }
     },
     onToggleAudio: guard('onToggleAudio', () => ui.toggleAudio()),
+    onCycleQuality: guard('onCycleQuality', () => cycleQuality()),
     onResume: guard('onResume', () => resumeSession()),
   },
 });
 ui.applyProfile(profile);
 ui.applySettings(settings);
+ui.setQualityLabel(settings.quality);
+document.body.dataset.quality = settings.quality;
 ui.setMechanic(profile.mech, true);
 ui.showLoading();
 setLoaderStatus('正在连接 ' + Net.defaultUrl());
@@ -321,6 +338,21 @@ function handleMessage(msg) {
 }
 
 // ------------------------------------------------------------------ actions
+// In-game quality switch: one click cycles 高 → 中 → 低 → 高 and persists.
+function cycleQuality() {
+  const order = ['high', 'med', 'low'];
+  const current = settings.quality || 'med';
+  const next = order[(order.indexOf(current) + 1) % order.length];
+  settings.quality = next;
+  if (next !== 'low' && stage.is3D !== false) settings.renderScale = 1;
+  saveJSON(LS_SETTINGS, settings);
+  ui.applySettings(settings);
+  if (game.running) game.applyQuality(next, settings.renderScale);
+  else stage.setQuality(is2D ? 'low' : next, settings.renderScale);
+  ui.setQualityLabel(next);
+  ui.toast(`画质已切换为「${{ high: '高', med: '中', low: '低' }[next]}」`, 'ok');
+}
+
 function setLoaderStatus(text, isErr = false) {
   const el = document.getElementById('loader-status');
   if (!el) return;
@@ -429,10 +461,22 @@ function connectServer(input) {
 
 // ------------------------------------------------------------------ loop
 let last = performance.now();
+let frameAcc = 0;
 let fpsFrames = 0, fpsTime = 0;
 function frame(now) {
-  const dt = Math.min(0.05, (now - last) / 1000);
+  const raw = (now - last) / 1000;
   last = now;
+  // Frame cap: 144 Hz panels were rendering this game at 144 fps for no
+  // visual benefit and 2.4× the GPU cost.
+  const cap = Math.max(0, Number(settings.maxFps) || 60);
+  const minFrame = cap > 0 ? 1 / cap : 0;
+  frameAcc += raw;
+  if (minFrame > 0 && frameAcc < minFrame - 0.0025) {
+    requestAnimationFrame(frame);
+    return;
+  }
+  const dt = Math.min(0.05, frameAcc);
+  frameAcc = 0;
   try {
     if (view === 'menu' || view === 'lobby') {
       menuScene.update(dt);

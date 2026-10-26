@@ -12,7 +12,8 @@
     "sim": "node scripts/simtest.js",
     "smoke": "node scripts/uismoke.js && node scripts/gamesmoke.js && node scripts/stage2dtest.js && node scripts/audiotest.js",
     "e2e": "node scripts/e2e.js",
-    "audio": "node scripts/audiotest.js"
+    "audio": "node scripts/audiotest.js",
+    "perf": "node scripts/perftest.js"
   },
   "dependencies": {
     "three": "0.186.1",

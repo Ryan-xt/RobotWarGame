@@ -49,7 +49,11 @@ export class ArenaView {
     this.buildAcids();
     this.buildTowers();
     this.buildPads();
+    // Decorative meshes (barrels, pipes, floodlight towers) are the first
+    // thing to drop when the player needs frames back.
+    const baseline = new Set(this.group.children);
     this.buildProps();
+    this.decor = this.group.children.filter((c) => !baseline.has(c));
     this.buildBoundary();
     this.buildDust();
   }
@@ -792,10 +796,17 @@ export class ArenaView {
 
   setQuality(q) {
     this.quality = q;
+    // ambient dust and rim props are pure decoration: skip them on low
+    if (this.dust) this.dust.visible = q !== 'low';
+    if (this.centerGlow) this.centerGlow.visible = q !== 'low';
+    for (const g of this.decor || []) g.visible = q !== 'low';
     if (!this.sun) return;
+    const size = q === 'high' ? 1024 : q === 'med' ? 512 : 512;
     this.sun.castShadow = q !== 'low';
-    this.sun.shadow.mapSize.set(q === 'low' ? 1024 : 2048, q === 'low' ? 1024 : 2048);
-    if (this.sun.shadow.map) { this.sun.shadow.map.dispose(); this.sun.shadow.map = null; }
+    if (this.sun.shadow.mapSize.x !== size) {
+      this.sun.shadow.mapSize.set(size, size);
+      if (this.sun.shadow.map) { this.sun.shadow.map.dispose(); this.sun.shadow.map = null; }
+    }
   }
 
   dispose() {
