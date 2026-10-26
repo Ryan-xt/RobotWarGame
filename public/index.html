@@ -464,8 +464,15 @@
     }, true);
     window.addEventListener('error', function (e) {
       if (e && e.target && e.target.tagName === 'SCRIPT') {
-        show('脚本加载失败', 'app.js 没能加载：' + (e.target.src || ''), '检查 /app.js 是否可访问（HTTP 200）。');
-        send('script-load-fail', e.target.src);
+        var src = e.target.src || '';
+        // Ignore third-party noise (analytics beacons blocked by CSP & co):
+        // only a failure of our own bundle actually matters.
+        if (src && src.indexOf(location.host) === -1 && src.indexOf('/app.js') === -1) {
+          send('third-party-script-blocked', src);
+          return;
+        }
+        show('脚本加载失败', 'app.js 没能加载：' + src, '检查 /app.js 是否可访问（HTTP 200）。');
+        send('script-load-fail', src);
         return;
       }
       if (!e) return;
