@@ -95,6 +95,17 @@ export class Game {
     this.selfDashCd = 0;
     this.selfSnapAt = 0;
     this.phasePrev = 'countdown';
+    // Remote players are drawn from a small snapshot buffer instead of being
+    // snapped to each 20 Hz packet (see sampleRemote). `remoteClock` is the
+    // server timeline we draw at: it advances with the frame, only ever slews
+    // slowly towards the newest snapshot, and therefore never jumps — that is
+    // what turned 20 Hz bot movement into stutter before.
+    this.remoteClock = 0;
+    this.remoteTarget = 0;
+    this.remoteSet = false;
+    this.interpDelay = 0.08;
+    this.interpTarget = 0.08;
+    this.arrivalOffs = [];
 
     const arena = info.arena;
     this.arena = arena;
@@ -496,12 +507,14 @@ export class Game {
     this.myId = youId || this.myId;
     const now = performance.now();
     this.snapAt = now;
+    this.updateServerClock(snap.t);
     for (const p of snap.players) {
       const v = this.players.get(p.id);
       if (!v) continue;
       const wasAlive = v.alive;
       v.data = p;
       v.alive = p.alive;
+      if (p.id !== this.myId) this.pushSample(v, p, snap.t || 0);
       v.heat = p.heat;
       v.targetX = p.x; v.targetZ = p.z;
       v.aim = p.id === this.myId ? this.localAim : v.aim;
@@ -1111,9 +1124,14 @@ export class Game {
   // ------------------------------------------------------------------ frame
   update(dt) {
     if (!this.scene) return;
+    // remote players are pure playback, so they follow the real elapsed time
+    // even when this frame is long; the local sim below is clamped separately
+    const rawDt = dt;
+    this.slowFrame = rawDt > 0.05;
     dt = Math.min(0.05, dt);
     this.lastDt = dt;
     this.time += dt;
+
     this.fpsFrames++;
     this.fpsAcc += dt;
     if (this.fpsAcc > 0.5) {
@@ -1141,6 +1159,7 @@ export class Game {
         this.lowFpsTime = Math.max(0, this.lowFpsTime - 0.25);
       }
     }
+    this.advanceRemoteClock(Math.min(0.25, rawDt));
     this.updateAim();
     if (this.running && !this.ended) {
       this.predict(dt);
@@ -1206,9 +1225,111 @@ export class Game {
     }
   }
 
+  /**
+   * A snapshot arrived: move the target render time just behind it and keep an
+   * eye on how much the arrival timing wobbles (packet jitter), which is what
+   * decides how much buffer remote players need.
+   */
+  updateServerClock(t) {
+    if (typeof t !== 'number') return;
+    // Arrival jitter: how much the delay of a packet varies. Measured as a
+    // percentile spread rather than min/max so that one long frame (a hitch,
+    // a tab throttle) cannot inflate the buffer for the rest of the match.
+    const off = t - this.time;
+    const arr = this.arrivalOffs;
+    arr.push(off);
+    if (arr.length > 60) arr.shift();
+    let spread = 0;
+    if (arr.length >= 12) {
+      const sorted = [...arr].sort((a, b) => a - b);
+      const p10 = sorted[Math.floor(sorted.length * 0.1)];
+      const p90 = sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.9))];
+      spread = Math.max(0, p90 - p10);
+    }
+    // grow the delay quickly when the link is jittery, shrink it slowly
+    this.interpTarget = clamp(0.05 + spread * 1.2, 0.06, 0.2);
+    const k = this.interpTarget > this.interpDelay ? 0.25 : 0.03;
+    this.interpDelay += (this.interpTarget - this.interpDelay) * k;
+
+    this.remoteTarget = t - this.interpDelay;
+    if (!this.remoteSet || Math.abs(this.remoteTarget - this.remoteClock) > 1.5) {
+      this.remoteClock = this.remoteTarget; // first snapshot, reconnect, resume
+      this.remoteSet = true;
+    }
+  }
+
+  /**
+   * Advance the render clock by the real frame time and slew it towards the
+   * newest snapshot at a bounded rate. Remote players are pure playback, so a
+   * long frame should move them by the full elapsed time (that is what the
+   * screen shows anyway); the slew keeps the buffer healthy afterwards.
+   */
+  advanceRemoteClock(dt) {
+    if (!this.remoteSet) return;
+    this.remoteClock += dt;
+    const err = this.remoteTarget - this.remoteClock;
+    if (!err) return;
+    const maxSlew = dt * 0.12; // at most 12% faster/slower than real time
+    this.remoteClock += clamp(err * 0.2, -maxSlew, maxSlew);
+  }
+
+  /**
+   * Keep the last ~1.2 s of authoritative samples for a remote player.
+   *
+   * 20 Hz snapshots alone make a mech move in 50 ms steps, and the old code
+   * ran them through an exponential filter that also fought the snapshot's own
+   * extrapolation — the visible result was a bot that stutters, freezes for a
+   * frame and then jumps. Recording the samples lets us interpolate between
+   * them at the real frame rate instead.
+   */
+  pushSample(v, p, t) {
+    const buf = v.buf || (v.buf = []);
+    const last = buf[buf.length - 1];
+    if (last && t <= last.t) return; // duplicate / out of order
+    // a respawn, a claw pull or a teleport is not something to slide across
+    if (last && (Math.hypot(p.x - last.x, p.z - last.z) > 2.5 || last.alive !== p.alive)) buf.length = 0;
+    buf.push({ t, x: p.x, z: p.z, vx: p.vx || 0, vz: p.vz || 0, alive: p.alive });
+    const cutoff = t - 1.2;
+    while (buf.length > 2 && buf[1].t < cutoff) buf.shift();
+    if (buf.length > 64) buf.splice(0, buf.length - 64);
+  }
+
+  /**
+   * Draw a remote player at (server clock - interpDelay): normally between two
+   * snapshots, so it moves at the true speed every frame. If the buffer runs
+   * dry (packet loss, hitch) fall back to dead reckoning from the last sample
+   * for at most 300 ms, then hold still — never a backwards jump.
+   */
+  sampleRemote(v) {
+    const buf = v.buf;
+    if (!buf || !buf.length) return;
+    const rt = this.remoteClock;
+    let i = buf.length - 1;
+    while (i > 0 && buf[i].t > rt) i--;
+    const a = buf[i];
+    const b = buf[i + 1];
+    let x;
+    let z;
+    if (b && b.t > a.t && rt <= b.t) {
+      const f = clamp((rt - a.t) / (b.t - a.t), 0, 1);
+      x = a.x + (b.x - a.x) * f;
+      z = a.z + (b.z - a.z) * f;
+    } else {
+      // Ran out of samples: ask for a slightly bigger buffer next time. Not
+      // when this frame itself was long (a hitch or a tab throttle), though —
+      // that starves the buffer on every frame of the stall and would inflate
+      // the delay for the rest of the match.
+      if (rt > a.t + 0.002 && !this.slowFrame) this.interpDelay = Math.min(0.2, this.interpDelay + 0.004);
+      const ahead = clamp(rt - a.t, 0, 0.3);
+      x = a.x + a.vx * ahead;
+      z = a.z + a.vz * ahead;
+    }
+    v.rx = x; v.rz = z;
+    v.x = x; v.z = z;
+  }
+
   updatePlayers(dt) {
     const snap = this.snap;
-    const k = 1 - Math.exp(-dt * 15);
     for (const v of this.players.values()) {
       const d = v.data;
       if (!d) continue;
@@ -1233,12 +1354,7 @@ export class Game {
         }
         v.aim = this.localAim;
       } else {
-        const timeSince = Math.min(0.18, (performance.now() - (this.snapAt || performance.now())) / 1000);
-        const ex = d.x + d.vx * timeSince * 0.7;
-        const ez = d.z + d.vz * timeSince * 0.7;
-        v.rx += (ex - v.rx) * k;
-        v.rz += (ez - v.rz) * k;
-        v.x = v.rx; v.z = v.rz;
+        this.sampleRemote(v);
         if (d.alive) v.aim = lerpAngle(v.aim, d.aim, 1 - Math.exp(-dt * 16));
         v.speed = Math.hypot(d.vx, d.vz);
       }

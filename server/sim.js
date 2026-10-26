@@ -402,15 +402,21 @@ export class MatchSim {
       override = { x: p.dashDirX * sp, z: p.dashDirZ * sp };
     }
     if (p.skillState && p.skillState.type === 'charge') {
-      if (p.skillState.until > this.t) {
+      // Hold the state locally: hitting someone can explode a reactor and stun
+      // (or kill) the very mech that is charging, which nulls p.skillState in
+      // the middle of the loop. Reading it through the player object then threw
+      // a TypeError and took the whole match down with it.
+      const sk = p.skillState;
+      if (sk.until > this.t) {
         const sp = 3.5 / 0.24;
-        override = { x: p.skillState.dirX * sp, z: p.skillState.dirZ * sp };
+        override = { x: sk.dirX * sp, z: sk.dirZ * sp };
         p.iframeUntil = Math.max(p.iframeUntil, this.t + 0.05);
         for (const q of this.players.values()) {
-          if (!q.alive || q.id === p.id || p.skillState.hitIds.has(q.id)) continue;
+          if (p.skillState !== sk) break; // charge was interrupted mid-loop
+          if (!q.alive || q.id === p.id || sk.hitIds.has(q.id)) continue;
           if (this.settings.mode !== 'ffa' && q.team === p.team) continue;
           if (dist(p.x, p.z, q.x, q.z) < PLAYER_RADIUS * 2 + 0.55) {
-            p.skillState.hitIds.add(q.id);
+            sk.hitIds.add(q.id);
             this.addHeat(q, 18, 'charge', p.id);
             this.knockback(q, q.x - p.x, q.z - p.z, 12);
             this.fxEmit({ e: 'chargeHit', x: q.x, z: q.z, id: p.id, target: q.id });

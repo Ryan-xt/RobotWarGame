@@ -11,6 +11,7 @@
     "dev": "node scripts/build.js && node server/index.js",
     "sim": "node scripts/simtest.js",
     "nettest": "node scripts/nettest.js",
+    "botmotion": "node scripts/botmotion.js",
     "smoke": "node scripts/uismoke.js && node scripts/gamesmoke.js && node scripts/stage2dtest.js && node scripts/audiotest.js",
     "e2e": "node scripts/e2e.js",
     "audio": "node scripts/audiotest.js",
