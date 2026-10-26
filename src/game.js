@@ -4,7 +4,7 @@ import { Fx } from './fx.js';
 import { createMech, updateMech, disposeMech } from './mech.js';
 import { mechOf } from '../shared/mechs.js';
 import {
-  ITEM_TYPES, PLAYER_COLORS, TEAM_COLORS, BULLET, PLAYER_RADIUS,
+  ITEM_TYPES, PLAYER_COLORS, TEAM_COLORS, BULLET, PLAYER_RADIUS, DASH,
   clamp, angleDiff, normAngle, dist,
 } from '../shared/constants.js';
 import { stepMotion, speedFactorForHeat } from '../shared/motion.js';
@@ -22,6 +22,8 @@ const _ray = new THREE.Raycaster();
 const _aimPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -1.0);
 const _aimHit = new THREE.Vector3();
 const easeOut = (t) => 1 - Math.pow(1 - t, 3);
+// Server dash velocity (sim.js): distance / duration * 1.02
+const DASH_SPEED = (DASH.distance / DASH.duration) * 1.02;
 
 const SOURCE_NAMES = {
   bolt: '电磁弹', bounceBolt: '反弹弹', charge: '冲撞', hook: '钩爪', mine: '电磁地雷',
@@ -87,6 +89,12 @@ export class Game {
     this.localVel = { x: 0, z: 0 };
     this.localCharge = 0;
     this.localFireHeld = 0;
+    this.inputHistory = [];
+    this.localDash = { until: 0, dx: 0, dz: 0 };
+    this.visOff = { x: 0, z: 0 };
+    this.selfDashCd = 0;
+    this.selfSnapAt = 0;
+    this.phasePrev = 'countdown';
 
     const arena = info.arena;
     this.arena = arena;
@@ -108,14 +116,19 @@ export class Game {
     this.arenaView = new ArenaView(this.scene, arena, this.stage.quality);
     this.fx = new Fx(this.scene, this.stage.quality);
 
+    // The sim shuffles spawns, so trust the positions it actually used
+    // (info.spawns) instead of guessing — guessing caused a 30 m pop on GO.
     const spawns = arena.spawns;
+    const spawnById = new Map((info.spawns || []).map((s) => [s.id, s]));
     info.players.forEach((p, i) => {
-      const sp = spawns[i % spawns.length];
+      const sp = spawnById.get(p.id) || spawns[i % spawns.length];
       this.addPlayerVisual(p, sp.x, sp.z);
     });
     const self = this.players.get(this.myId);
     if (self) {
       self.predicted = { x: self.x, z: self.z, vx: 0, vz: 0 };
+      const ownSpawn = spawnById.get(this.myId);
+      if (ownSpawn && typeof ownSpawn.aim === 'number') this.localAim = ownSpawn.aim;
       this.selfVisual = self;
       this.ui.setKiller(null);
       this.ui.beginMatch({ ...info, roomCode: this.currentRoomCode }, arena);
@@ -282,14 +295,29 @@ export class Game {
     if (!canAct) { mx = 0; mz = 0; }
     if (this.sendAcc >= 1 / 30) {
       this.sendAcc = 0;
+      // Predict the dash locally so the server's 2.8 m burst does not arrive
+      // as a surprise correction (that was one source of the "yank back").
+      // The cooldown read from the snapshot is already a few ms old, so age it
+      // before deciding: a Space press on the boundary must still feel instant.
+      const cdLeft = Math.max(0, this.selfDashCd - (this.time - this.selfSnapAt));
+      if (this.pending.dash && canAct && cdLeft <= 0.03 && !self.stunned && !(self.channel > 0)) {
+        this.localDash.until = this.time + DASH.duration;
+        this.selfDashCd = DASH.cooldown;
+        this.selfSnapAt = this.time;
+        const mv = Math.hypot(mx, mz);
+        this.localDash.dx = mv > 0.1 ? mx / mv : Math.cos(this.localAim);
+        this.localDash.dz = mv > 0.1 ? mz / mv : Math.sin(this.localAim);
+      }
       this.send({
         type: 'input',
         mx, mz,
         aim: Math.round(this.localAim * 1000) / 1000,
         fire: !!(this.mouse.down && canAct),
-        dash: this.pending.dash,
-        skill: this.pending.skill,
-        useItem: this.pending.item,
+        // actions pressed during the countdown must not fire on GO: the server
+        // would dash somewhere the client never predicted (a 2.8 m yank)
+        dash: !!(this.pending.dash && canAct),
+        skill: !!(this.pending.skill && canAct),
+        useItem: !!(this.pending.item && canAct),
         seq: ++this.seq,
       });
       this.pending.dash = false;
@@ -317,15 +345,148 @@ export class Game {
     let speedMult = mech.stats.speed * speedFactorForHeat(s.heat || 0);
     if (s.inAcid) speedMult *= 0.8;
     if (s.sniperCharge) speedMult *= 0.8;
+    const dashing = this.time < this.localDash.until;
+    const overrideVel = dashing ? { x: this.localDash.dx * DASH_SPEED, z: this.localDash.dz * DASH_SPEED } : null;
     stepMotion(v.predicted, { mx, mz }, dt, {
       speedMult,
       stunned: !!s.stunned,
       immobile: (s.channel || 0) > 0,
+      overrideVel,
     });
     resolvePlayerArena(this.clientArena, v.predicted, PLAYER_RADIUS);
-    v.x = v.predicted.x;
-    v.z = v.predicted.z;
+    // Record exactly what this frame simulated, tagged with the newest input
+    // sequence that had been sent. Replaying these frames on top of an
+    // authoritative snapshot reproduces the motion the player already saw.
+    this.inputHistory.push({
+      seq: this.seq, mx, mz, dt, speedMult,
+      stunned: !!s.stunned,
+      immobile: (s.channel || 0) > 0,
+      ov: overrideVel ? { x: overrideVel.x, z: overrideVel.z } : null,
+    });
+    if (this.inputHistory.length > 240) this.inputHistory.splice(0, this.inputHistory.length - 240);
+    // position = prediction + the decaying visual offset that hides corrections
+    v.x = v.predicted.x + this.visOff.x;
+    v.z = v.predicted.z + this.visOff.z;
+    v.rx = v.predicted.x;
+    v.rz = v.predicted.z;
     v.speed = Math.hypot(v.predicted.vx, v.predicted.vz);
+  }
+
+  /**
+   * Authoritative snapshot vs local prediction.
+   *
+   * The old code compared the *current* predicted position with the snapshot's
+   * (already stale) position. At 6.4 m/s that gap is simply the network
+   * latency converted to metres, so every snapshot dragged the mech backwards
+   * and any jitter crossed the 2.4 m limit and teleported it — the "yanked
+   * back" bug.
+   *
+   * Now the authoritative state is used as a starting point and the frames the
+   * server has not simulated yet are replayed on top (Quake-style). The result
+   * is where the player *should* be given the same inputs, so the residual is
+   * near zero even with 120 ms of latency, and dashes/acceleration replay
+   * exactly instead of fighting the correction.
+   */
+  reconcileSelf(v, p, wasAlive) {
+    if (!v.predicted) return;
+    const hist = this.inputHistory;
+    const ack = p.seq | 0;
+    // the cooldown estimate must never move backwards: snapshots taken before
+    // a dash we already predicted still say "ready"
+    if (typeof p.dashCd === 'number') {
+      const localCd = Math.max(0, this.selfDashCd - (this.time - this.selfSnapAt));
+      this.selfDashCd = Math.max(p.dashCd, localCd);
+      this.selfSnapAt = this.time;
+    }
+
+    if (!wasAlive && p.alive) {
+      v.predicted.x = p.x; v.predicted.z = p.z; v.predicted.vx = 0; v.predicted.vz = 0;
+      this.visOff.x = 0; this.visOff.z = 0;
+      this.prevSrvPos = { x: p.x, z: p.z };
+      this.prevAlive = true;
+      this.ui.setKiller(null);
+      this.fx.ring(p.x, p.z, { color: '#9fe9ff', r0: 0.3, r1: 2.6, life: 0.6 });
+      this.audio?.sfx('respawn');
+      this.camFocus.x = p.x; this.camFocus.z = p.z;
+      hist.length = 0;
+      return;
+    }
+    if (!p.alive) {
+      this.prevAlive = false;
+      this.deathPos = { x: p.x, z: p.z };
+      v.predicted.x = p.x; v.predicted.z = p.z;
+      v.x = p.x; v.z = p.z;
+      this.visOff.x = 0; this.visOff.z = 0;
+      this.prevSrvPos = { x: p.x, z: p.z };
+      hist.length = 0;
+      return;
+    }
+
+    // frames the server has not simulated yet: everything sent after the ack
+    let i0 = 0;
+    while (i0 < hist.length && hist[i0].seq <= ack) i0++;
+
+    const justWentLive = this.phasePrev === 'countdown' && this.snap && this.snap.phase === 'live';
+    this.phasePrev = this.snap ? this.snap.phase : this.phasePrev;
+
+    const beforeX = v.predicted.x;
+    const beforeZ = v.predicted.z;
+
+    // replay the pending frames on top of the authoritative state
+    const replayed = { x: p.x, z: p.z, vx: p.vx || 0, vz: p.vz || 0 };
+    for (let i = i0; i < hist.length; i++) {
+      const h = hist[i];
+      stepMotion(replayed, { mx: h.mx, mz: h.mz }, h.dt, {
+        speedMult: h.speedMult,
+        stunned: h.stunned,
+        immobile: h.immobile,
+        overrideVel: h.ov,
+      });
+      resolvePlayerArena(this.clientArena, replayed, PLAYER_RADIUS);
+    }
+    // keep only the frames still in flight
+    if (i0 > 0) hist.splice(0, i0);
+
+    const dx = replayed.x - beforeX;
+    const dz = replayed.z - beforeZ;
+    const err = Math.hypot(dx, dz);
+
+    // A match start is the one moment where a hard cut is expected; every
+    // other correction keeps the rendered position continuous (the offset is
+    // then drained at a bounded rate, so it never reads as a jerk).
+    if (justWentLive) {
+      v.predicted.x = replayed.x; v.predicted.z = replayed.z;
+      v.predicted.vx = replayed.vx; v.predicted.vz = replayed.vz;
+      this.visOff.x = 0; this.visOff.z = 0;
+      this.prevSrvPos = { x: p.x, z: p.z };
+      return;
+    }
+
+    // where the player actually sees the mech right now
+    const renderX = beforeX + this.visOff.x;
+    const renderZ = beforeZ + this.visOff.z;
+
+    v.predicted.x = replayed.x;
+    v.predicted.z = replayed.z;
+    v.predicted.vx = replayed.vx;
+    v.predicted.vz = replayed.vz;
+    if (err < 0.002) return;
+
+    // A real teleport (claw grab, respawn hook, admin move) cannot be hidden by
+    // trailing behind for two seconds — cut instead.
+    const srvJump = this.prevSrvPos
+      ? Math.hypot(p.x - this.prevSrvPos.x, p.z - this.prevSrvPos.z)
+      : 0;
+    this.prevSrvPos = { x: p.x, z: p.z };
+    if (srvJump > 4 || err > 5) {
+      this.visOff.x = 0; this.visOff.z = 0;
+      return;
+    }
+
+    // keep the pixels where they were; updatePlayers() drains the offset at a
+    // fixed 2 cm per frame, so it never reads as a jerk
+    this.visOff.x = renderX - replayed.x;
+    this.visOff.z = renderZ - replayed.z;
   }
 
   // --------------------------------------------------------------- snapshots
@@ -346,34 +507,7 @@ export class Game {
       v.aim = p.id === this.myId ? this.localAim : v.aim;
       if (p.id === this.myId) {
         this.selfData = p;
-        if (v.predicted) {
-          if (!wasAlive && p.alive) {
-            v.predicted.x = p.x; v.predicted.z = p.z; v.predicted.vx = 0; v.predicted.vz = 0;
-            this.prevAlive = true;
-            this.ui.setKiller(null);
-            this.fx.ring(p.x, p.z, { color: '#9fe9ff', r0: 0.3, r1: 2.6, life: 0.6 });
-            this.audio?.sfx('respawn');
-            this.camFocus.x = p.x; this.camFocus.z = p.z;
-          }
-          if (!p.alive) { this.prevAlive = false; this.deathPos = { x: p.x, z: p.z }; }
-          // soft reconciliation, unless the server clearly teleported us
-          const dx = p.x - v.predicted.x, dz = p.z - v.predicted.z;
-          const err = Math.hypot(dx, dz);
-          if (p.alive) {
-            if (err > 2.4 || (p.stunned && err > 0.8)) {
-              v.predicted.x = p.x; v.predicted.z = p.z;
-            } else if (err > 0.55) {
-              const k = Math.min(1, (err > 1.4 ? 9 : 2.5) * 0.05);
-              v.predicted.x += dx * k;
-              v.predicted.z += dz * k;
-            }
-            v.rx = v.predicted.x;
-            v.rz = v.predicted.z;
-          } else {
-            v.predicted.x = p.x; v.predicted.z = p.z;
-            v.x = p.x; v.z = p.z;
-          }
-        }
+        this.reconcileSelf(v, p, wasAlive);
       } else {
         if (!wasAlive && p.alive) {
           v.rx = p.x; v.rz = p.z;
@@ -1080,7 +1214,23 @@ export class Game {
       if (!d) continue;
       const isSelf = v.id === this.myId;
       if (isSelf) {
-        if (v.predicted) { v.x = v.predicted.x; v.z = v.predicted.z; v.rx = v.x; v.rz = v.z; }
+        if (v.predicted) {
+          v.rx = v.predicted.x; v.rz = v.predicted.z;
+          v.x = v.predicted.x + this.visOff.x;
+          v.z = v.predicted.z + this.visOff.z;
+        }
+        // Smooth away reconciliation corrections instead of snapping. The
+        // offset is always drained at most 2 cm per frame, so a correction can
+        // never read as a jerk (at 60 fps that is 1.2 m/s, slower than any
+        // mech) — a big correction becomes a short trail rather than a yank.
+        const offLen = Math.hypot(this.visOff.x, this.visOff.z);
+        if (offLen > 0) {
+          const cap = 0.02;
+          const keep = Math.max(0, 1 - cap / offLen);
+          this.visOff.x *= keep;
+          this.visOff.z *= keep;
+          if (offLen * keep < 0.003) { this.visOff.x = 0; this.visOff.z = 0; }
+        }
         v.aim = this.localAim;
       } else {
         const timeSince = Math.min(0.18, (performance.now() - (this.snapAt || performance.now())) / 1000);

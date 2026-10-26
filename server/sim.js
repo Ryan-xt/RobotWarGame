@@ -106,6 +106,15 @@ export class MatchSim {
     this._spawnAll();
   }
 
+  /** Current spawn positions, so clients place the mechs where the sim did. */
+  spawnState() {
+    const out = [];
+    for (const p of this.players.values()) {
+      out.push({ id: p.id, x: round2(p.x), z: round2(p.z), aim: round3(p.aim) });
+    }
+    return out;
+  }
+
   suddenDeathSeconds() {
     const n = this.order.length;
     if (this.settings.stormLength) return this.settings.stormLength;
@@ -364,8 +373,8 @@ export class MatchSim {
       p.pendingDash = false;
       if (this.t >= p.dashCdUntil && p.stunUntil <= this.t && p.channelEnd <= this.t) {
         const mv = Math.hypot(p.input.mx, p.input.mz);
-        const dx = mv > 0.1 ? p.input.mx : Math.cos(p.aim);
-        const dz = mv > 0.1 ? p.input.mz : Math.sin(p.aim);
+        const dx = mv > 0.1 ? p.input.mx / mv : Math.cos(p.aim);
+        const dz = mv > 0.1 ? p.input.mz / mv : Math.sin(p.aim);
         p.dashDirX = dx; p.dashDirZ = dz;
         p.dashUntil = this.t + DASH.duration;
         p.dashCdUntil = this.t + DASH.cooldown;
@@ -1357,6 +1366,9 @@ export class MatchSim {
         inCooler: p.inCooler, inAcid: p.inAcid, inLeak: p.inLeak, inStorm: p.inStorm,
         sniperCharge: p.skillState && p.skillState.type === 'sniperCharge' ? 1 : 0,
         seq: p.input.seq,
+        dashIn: round2(Math.max(0, p.dashUntil - this.t)),
+        dashDx: round3(p.dashDirX || 0),
+        dashDz: round3(p.dashDirZ || 0),
         paused: p.disconnected,
       });
     }

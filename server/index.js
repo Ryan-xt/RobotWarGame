@@ -295,6 +295,7 @@ function handleMessage(ws, clientId, msg) {
             id: m.playerId, name: m.name, color: m.color, colorId: m.colorId,
             mech: m.mech, team: m.team || 0, bot: m.bot, isHost: m.clientId === target.host,
           })),
+          spawns: target.sim.spawnState(),
           matchCount: target.matchCount,
         });
         const snap = target.sim.snapshot();

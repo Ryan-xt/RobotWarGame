@@ -224,6 +224,7 @@ export class Room {
         duration: settings.duration,
         you: m.playerId,
         players: infos,
+        spawns: this.sim.spawnState(),
         matchCount: this.matchCount,
       });
     }
