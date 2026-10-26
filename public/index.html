@@ -1,0 +1,410 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<meta name="theme-color" content="#0b0c0d">
+<title>废土过载 · WASTELAND OVERLOAD</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' fill='%230b0c0d'/%3E%3Cpath d='M32 6 54 20v24L32 58 10 44V20z' fill='none' stroke='%23ffb02e' stroke-width='4'/%3E%3Cpath d='M36 16 24 34h8l-4 14 16-20h-9z' fill='%2346d9ff'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div id="app">
+  <canvas id="stage"></canvas>
+  <div id="grain"></div>
+  <div id="vignette"></div>
+
+  <!-- ============================ LOADING ============================ -->
+  <section id="screen-loading" class="screen loading">
+    <div class="loader-inner">
+      <div class="loader-mark">
+        <span class="lm-cn">废土过载</span>
+        <span class="lm-en">WASTELAND OVERLOAD</span>
+      </div>
+      <div class="loader-bar"><i></i></div>
+      <div class="loader-txt">正在为过载核心接线<span class="blink">...</span></div>
+      <div class="loader-tip">被击中不会掉血。掉的是理智。</div>
+    </div>
+  </section>
+
+  <!-- ============================ MENU ============================ -->
+  <section id="screen-menu" class="screen menu hidden">
+    <div class="menu-shade"></div>
+    <div class="brand-top">
+      <span class="brand-chip"><i class="dot"></i> LIVE // 废土广播网 07</span>
+      <span class="brand-chip muted">LAN MAYHEM · 2–8 机甲</span>
+    </div>
+
+    <div class="menu-left">
+      <div class="logo-block">
+        <div class="logo-kicker">电磁反弹 · 过载博弈 · 即开即战</div>
+        <h1 class="logo">
+          <span class="logo-bg">OVERLOAD</span>
+          <span class="logo-line1">废土</span><span class="logo-line2">过载</span>
+        </h1>
+        <div class="logo-sub">W A S T E L A N D&nbsp;&nbsp;O V E R L O A D<span class="logo-ver">v0.1 竞技场原型</span></div>
+      </div>
+      <p class="tagline">被电磁弹击中不会掉血，只会让核心<b>升温</b>。<br>靠散热区、冷却罐、反弹角度和一点点疯狂，活到最后一台机甲。</p>
+
+      <div class="menu-actions">
+        <button id="btn-quick" class="btn primary big">
+          <span class="btn-ico">⚡</span>
+          <span class="btn-text"><b>快速开战</b><small>1 人 + 3 台 AI · 立即接线</small></span>
+          <span class="btn-corner"></span>
+        </button>
+        <button id="btn-create" class="btn"><span class="btn-text"><b>创建房间</b><small>设定模式 / AI / 事件频率</small></span></button>
+        <button id="btn-join" class="btn"><span class="btn-text"><b>加入房间</b><small>房间码或局域网列表</small></span></button>
+        <div class="btn-row">
+          <button id="btn-help" class="btn ghost small">操作档案</button>
+          <button id="btn-settings" class="btn ghost small">设置</button>
+          <button id="btn-audio" class="btn ghost small icon-only" title="静音">🔊</button>
+        </div>
+      </div>
+
+      <div class="profile-bar">
+        <div class="profile-field">
+          <label for="input-name">竞技者呼号</label>
+          <input id="input-name" maxlength="10" autocomplete="off" spellcheck="false" placeholder="废土客">
+        </div>
+        <div class="profile-field colors">
+          <label>机体涂装</label>
+          <div id="color-swatches" class="swatches"></div>
+        </div>
+      </div>
+
+      <div class="menu-foot">
+        <span id="conn-status" class="conn offline"><i></i>正在连接主机</span>
+        <span class="menu-foot-sep">/</span>
+        <span id="menu-version">BUILD 0.1.0 · 主机权威 · 无账号</span>
+        <button id="btn-resume" class="link hidden">恢复上局</button>
+      </div>
+    </div>
+
+    <aside class="menu-right">
+      <div class="live-card">
+        <div class="live-head"><span class="live-dot"></span> 战术档案 <span class="live-hint">右键技能 / 被动</span></div>
+        <div class="mc-name-row">
+          <div class="mc-sigil" id="mc-sigil"></div>
+          <div>
+            <div class="mc-name" id="menu-mech-name">破阵</div>
+            <div class="mc-role" id="menu-mech-role">突击型 · RAMSHAKER</div>
+          </div>
+        </div>
+        <p class="mc-blurb" id="menu-mech-blurb"></p>
+        <div class="mc-stats" id="menu-stats"></div>
+        <div class="mc-ability">
+          <div class="mc-ab-head"><span>右键 · <b id="menu-skill-name">冲撞</b></span><em id="menu-skill-cd">CD 6s</em></div>
+          <p id="menu-skill-desc"></p>
+        </div>
+        <div class="mc-passive"><span>被动</span><b id="menu-passive-name"></b><p id="menu-passive-desc"></p></div>
+        <div class="mc-tip" id="menu-mech-tip"></div>
+      </div>
+    </aside>
+
+    <div class="mech-rail-wrap">
+      <div class="rail-caption"><span>选择机体</span><span class="rail-key">A / D</span></div>
+      <div class="mech-rail" id="mech-rail"></div>
+    </div>
+    <div class="menu-scan"></div>
+  </section>
+
+  <!-- ============================ LOBBY ============================ -->
+  <section id="screen-lobby" class="screen lobby-screen hidden">
+    <div class="lobby-panel panel">
+      <header class="panel-head">
+        <div>
+          <div class="eyebrow">ROOM // 集结区</div>
+          <h2>废土竞技场 <span class="room-code" id="lobby-code">----</span></h2>
+        </div>
+        <div class="head-actions">
+          <button id="btn-copy-code" class="btn ghost small">复制房间码</button>
+          <button id="btn-leave-lobby" class="btn ghost small">离开</button>
+        </div>
+      </header>
+      <div class="lobby-grid">
+        <div class="lobby-col">
+          <div class="col-title"><span>竞技者</span><span id="lobby-count">0 / 8</span></div>
+          <div id="lobby-players" class="player-list"></div>
+          <div class="lobby-actions">
+            <button id="btn-ready" class="btn">准备 / 取消准备</button>
+            <button id="btn-start" class="btn primary">开始战斗</button>
+          </div>
+          <div class="lobby-note" id="lobby-note">房主设定战场后即可开始。AI 补位可以让你一个人也能先热身。</div>
+          <div class="chat-box">
+            <div class="chat-title">无线电 <span>Enter 发送</span></div>
+            <div id="chat-log" class="chat-log"></div>
+            <div class="chat-input-row">
+              <input id="chat-input" maxlength="60" placeholder="说点什么，废土客…">
+              <button id="btn-chat-send" class="btn ghost small">发送</button>
+            </div>
+            <div class="quick-chat">
+              <button data-phrase="过载了，撤！">过载了，撤！</button>
+              <button data-phrase="我来拉仇恨">我来拉仇恨</button>
+              <button data-phrase="冷却罐归我">冷却罐归我</button>
+              <button data-phrase="这波不亏">这波不亏</button>
+            </div>
+          </div>
+        </div>
+        <div class="lobby-col settings-col">
+          <div class="col-title"><span>战场设定</span><span class="host-only" id="settings-host-tag">仅房主可改</span></div>
+          <div class="settings-grid">
+            <label>模式
+              <select id="set-mode">
+                <option value="ffa">自由混战</option>
+                <option value="2v2">2v2 队伍</option>
+                <option value="3v3">3v3 队伍</option>
+                <option value="4v4">4v4 队伍</option>
+              </select>
+            </label>
+            <label>AI 补位
+              <select id="set-bots">
+                <option value="0">0 台</option><option value="1">1 台</option><option value="2">2 台</option>
+                <option value="3">3 台</option><option value="4">4 台</option><option value="5">5 台</option>
+                <option value="6">6 台</option><option value="7">7 台</option>
+              </select>
+            </label>
+            <label>地图尺寸
+              <select id="set-map">
+                <option value="auto">自动适配</option><option value="20">20 × 20 决斗场</option>
+                <option value="30">30 × 30 中图</option><option value="40">40 × 40 全图</option>
+              </select>
+            </label>
+            <label>事件频率
+              <select id="set-event">
+                <option value="low">低（更多枪法）</option><option value="med">中</option><option value="high">高（更混乱）</option>
+              </select>
+            </label>
+            <label>过载速度
+              <select id="set-heat">
+                <option value="slow">慢（长线）</option><option value="standard">标准</option><option value="fast">快（速战）</option>
+              </select>
+            </label>
+            <label>AI 难度
+              <select id="set-difficulty">
+                <option value="easy">菜鸟</option><option value="normal">老练</option><option value="hard">疯子</option>
+              </select>
+            </label>
+          </div>
+          <div class="arena-brief">
+            <div class="brief-line"><span>地图</span><b id="lobby-mapname">30 × 30 废土竞技场</b></div>
+            <div class="brief-line"><span>高分点</span><b>中央高台 · 清空过载</b></div>
+            <div class="brief-line"><span>危险</span><b>酸液池 / 电磁塔 / 机械臂</b></div>
+            <div class="brief-line"><span>胜利</span><b>击杀 +1 · 被烤熟 -1 · 限时积分</b></div>
+          </div>
+          <div class="lobby-tip">提示：70 过载以上会成为全场集火目标。提前找散热区，或者把冷却罐当诱饵。</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================ JOIN / SETTINGS / HELP MODALS ============================ -->
+  <div id="modal-join" class="modal hidden">
+    <div class="modal-card">
+      <header><h3>加入房间</h3><button class="modal-x" data-close="modal-join">✕</button></header>
+      <div class="join-code-row">
+        <input id="join-code" maxlength="6" placeholder="房间码" autocomplete="off" spellcheck="false">
+        <button id="btn-join-code" class="btn primary">直连</button>
+      </div>
+      <div class="join-sub">局域网房间列表 <button id="btn-refresh-rooms" class="link">刷新</button></div>
+      <div id="room-list" class="room-list"><div class="room-empty">扫描中…</div></div>
+      <details class="advanced">
+        <summary>高级 · 主机地址</summary>
+        <div class="ws-row">
+          <input id="ws-url" placeholder="ws://192.168.1.10:3000/ws">
+          <button id="btn-connect-ws" class="btn ghost small">连接</button>
+        </div>
+        <p>本页由主机提供时无需填写。朋友请直接打开主机地址；手机热点也能连。</p>
+      </details>
+    </div>
+  </div>
+
+  <div id="modal-settings" class="modal hidden">
+    <div class="modal-card">
+      <header><h3>系统设置</h3><button class="modal-x" data-close="modal-settings">✕</button></header>
+      <div class="settings-list">
+        <label class="row-setting">画质 <select id="set-quality"><option value="high">高（辉光 / 阴影）</option><option value="low">低（省电 / 集显）</option></select></label>
+        <label class="row-setting">主音量 <input id="set-volume" type="range" min="0" max="100" value="70"></label>
+        <label class="row-setting">镜头震动 <input id="set-shake" type="checkbox" checked></label>
+        <label class="row-setting">新手提示 <input id="set-hints" type="checkbox" checked></label>
+        <div class="setting-extra">
+          <div><b>控制</b><p>WASD 移动 · 鼠标瞄准 · 左键射击（长按蓄力）· 右键技能 · 空格冲刺 · E 道具 · Tab 记分板</p></div>
+          <div><b>局域网</b><p>主机运行服务后，朋友在同一网络打开主机 IP 即可加入。无需账号，无互联网依赖。</p></div>
+        </div>
+        <button id="btn-save-settings" class="btn primary">保存并关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="modal-help" class="modal hidden">
+    <div class="modal-card wide">
+      <header><h3>操作档案</h3><button class="modal-x" data-close="modal-help">✕</button></header>
+      <div class="help-grid">
+        <div class="help-item"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd><b>移动</b><p>8 方向，带轻微惯性。冲刺可以取消射击后摇。</p></div>
+        <div class="help-item"><kbd>左键</kbd><b>电磁弹</b><p>点按速射，长按 0.6 秒后松手打出蓄力弹。钢板、护盾、残骸都能反弹，反弹命中更痛。</p></div>
+        <div class="help-item"><kbd>右键</kbd><b>机甲技能</b><p>每台机甲一键释放：冲撞 / 钩爪 / 电磁盾 / 地雷 / 磁轨 / 自爆。</p></div>
+        <div class="help-item"><kbd>空格</kbd><b>冲刺</b><p>2.8 米短喷，前段 0.12 秒无敌。能躲机械臂、电磁塔和反弹弹。</p></div>
+        <div class="help-item"><kbd>E</kbd><b>道具</b><p>冷却罐需要站定 1.5 秒；手雷可以把敌人从掩体后炸出来；清空过载只在中央刷新。</p></div>
+        <div class="help-item"><kbd>Tab</kbd><b>记分板</b><p>查看比分、过载、击杀数和复活计时。90 过载会变成全场最亮的靶子。</p></div>
+      </div>
+      <div class="help-tips">
+        <span>别站在酸液里。</span><span>反弹 2 次后伤害更高。</span><span>散热区会暴露位置。</span><span>最后 30 秒电磁风暴加速过载。</span>
+      </div>
+    </div>
+  </div>
+
+  <div id="modal-mechs" class="modal hidden">
+    <div class="modal-card wide">
+      <header><h3>机甲档案 · 废物利用指南</h3><button class="modal-x" data-close="modal-mechs">✕</button></header>
+      <div id="mech-archive" class="archive-grid"></div>
+    </div>
+  </div>
+
+  <!-- ============================ GAME HUD ============================ -->
+  <section id="screen-game" class="screen game hidden">
+    <div id="hud">
+      <div class="hud-top">
+        <div class="hud-meta">
+          <span id="hud-mode" class="chip">自由混战</span>
+          <span id="hud-room" class="chip dark">ROOM ----</span>
+          <span id="hud-ping" class="chip tiny">-- ms</span>
+          <span id="hud-fps" class="chip tiny">-- FPS</span>
+        </div>
+        <div class="hud-clock">
+          <div id="hud-phase" class="phase">接线完成</div>
+          <div id="hud-time" class="time">03:00</div>
+          <div id="hud-teamscore" class="teamscore hidden"></div>
+        </div>
+        <div class="hud-alive">
+          <div id="hud-spectate" class="spectate hidden"></div>
+          <button id="btn-hud-leave" class="chip dark danger">退出战场</button>
+        </div>
+      </div>
+
+      <div class="minimap-wrap">
+        <div class="minimap-head"><span>竞技场雷达</span><span id="minimap-size">30m</span></div>
+        <canvas id="minimap" width="228" height="228"></canvas>
+        <div class="minimap-legend"><i class="cy"></i>散热 <i class="gr"></i>酸液 <i class="am"></i>道具</div>
+      </div>
+
+      <div id="event-banner" class="event-banner hidden">
+        <div class="ev-icon" id="ev-icon">⚡</div>
+        <div class="ev-copy"><div class="ev-name" id="ev-name">电磁风暴</div><div class="ev-desc" id="ev-desc">全场过载加速</div></div>
+        <div class="ev-stripes"></div>
+      </div>
+
+      <div id="killfeed" class="killfeed"></div>
+      <div id="chat-mini" class="chat-mini"></div>
+
+      <div class="hud-bottom">
+        <div class="heat-block panel">
+          <div class="heat-head">
+            <span class="heat-label">核心过载</span>
+            <span id="heat-state" class="heat-state">安全</span>
+            <b id="heat-value" class="heat-value">0</b>
+          </div>
+          <div class="heat-gauge">
+            <div class="heat-fill" id="heat-fill"></div>
+            <div class="heat-ticks" id="heat-ticks"></div>
+            <div class="heat-danger"><span>70</span></div>
+            <div class="heat-limit">100</div>
+          </div>
+          <div class="heat-note" id="heat-note">温度正常 · 保持移动</div>
+        </div>
+
+        <div class="mech-block panel">
+          <div class="mech-row">
+            <div class="mech-sigil" id="hud-sigil"></div>
+            <div class="mech-text"><b id="hud-mech-name">破阵</b><span id="hud-mech-role">突击型</span></div>
+            <div class="ammo-wrap"><div id="ammo-pips" class="ammo-pips"></div><div id="reload-bar" class="reload-bar"><i></i></div><span id="ammo-label">弹药 8/8</span></div>
+          </div>
+          <div class="abilities">
+            <div class="ability" id="ab-skill">
+              <div class="ab-ring"><div class="ab-fill"></div><div class="ab-glyph" id="ab-skill-glyph">⚡</div></div>
+              <div class="ab-meta"><div class="ab-name" id="ab-skill-name">冲撞</div><div class="ab-key">右键</div></div>
+            </div>
+            <div class="ability" id="ab-dash">
+              <div class="ab-ring"><div class="ab-fill"></div><div class="ab-glyph">⟩⟩</div></div>
+              <div class="ab-meta"><div class="ab-name">冲刺</div><div class="ab-key">空格</div></div>
+            </div>
+            <div class="ability item" id="ab-item">
+              <div class="ab-ring item-ring"><img id="item-icon" alt=""><div class="ab-fill"></div></div>
+              <div class="ab-meta"><div class="ab-name" id="item-name">空槽</div><div class="ab-key">E</div></div>
+            </div>
+          </div>
+          <div id="buff-row" class="buff-row"></div>
+        </div>
+      </div>
+
+      <div id="crosshair" class="crosshair">
+        <span class="ch-dot"></span><span class="ch-ring"></span><span class="ch-tick t1"></span><span class="ch-tick t2"></span><span class="ch-tick t3"></span><span class="ch-tick t4"></span>
+        <span class="ch-charge"></span>
+      </div>
+      <div id="hitmarker" class="hitmarker"></div>
+      <div id="floating-layer" class="floating-layer"></div>
+      <div id="damage-vignette" class="damage-vignette"></div>
+      <div id="storm-overlay" class="storm-overlay"></div>
+      <div id="sandstorm-overlay" class="sandstorm-overlay"></div>
+
+      <div id="countdown" class="countdown hidden"><div class="cd-label">核心同步</div><div class="cd-num">3</div><div class="cd-tip">WASD 移动 · 左键开火 · 冲进散热区</div></div>
+      <div id="death-overlay" class="death-overlay hidden">
+        <div class="death-card">
+          <div class="death-kicker">SHORT CIRCUIT</div>
+          <h2>短路</h2>
+          <div class="death-sub">被 <b id="death-killer">酸液</b> 煮熟</div>
+          <div class="respawn"><span id="respawn-time">10</span><small>秒后重新接线</small></div>
+          <div class="death-tip">退役机体会在出生点以 2 秒无敌重启。别急，先看谁在偷笑。</div>
+        </div>
+      </div>
+      <div id="tutorial" class="tutorial hidden">
+        <div class="tut-title">10 秒上手</div>
+        <div class="tut-row"><kbd>WASD</kbd> 移动 <kbd>鼠标</kbd> 瞄准 <kbd>左键</kbd> 开火（长按蓄力）</div>
+        <div class="tut-row"><kbd>右键</kbd> 机甲技能 <kbd>空格</kbd> 冲刺躲弹 <kbd>E</kbd> 用道具</div>
+        <div class="tut-row hint">过载满 100 会短路爆炸 · 站进白色冷光区降温</div>
+      </div>
+      <div id="scoreboard" class="scoreboard hidden">
+        <header><span>记分板</span><em>Tab 关闭</em></header>
+        <div id="scoreboard-body"></div>
+      </div>
+      <div id="disconnect-overlay" class="disconnect hidden">
+        <div class="dc-card"><div class="spinner"></div><b>信号中断</b><p>正在尝试重新连接主机…</p><span id="dc-hint"></span></div>
+      </div>
+      <div id="fps-warning" class="fps-warning hidden">帧率偏低 · 已自动降低特效</div>
+    </div>
+  </section>
+
+  <!-- ============================ RESULTS ============================ -->
+  <section id="screen-results" class="screen results hidden">
+    <div class="results-panel panel">
+      <header class="panel-head">
+        <div>
+          <div class="eyebrow">MATCH REPORT // 废土广播网</div>
+          <h2>本局战报 <span id="result-mode" class="chip">自由混战</span></h2>
+        </div>
+        <div class="result-meta" id="result-meta">03:00 · 30 × 30</div>
+      </header>
+      <div class="results-grid">
+        <div class="result-col">
+          <div class="col-title"><span>最终排名</span><span id="result-myrank"></span></div>
+          <div id="result-table" class="result-table"></div>
+        </div>
+        <div class="result-col">
+          <div class="col-title"><span>本局称号</span><span>节目效果</span></div>
+          <div id="result-awards" class="awards"></div>
+          <div class="result-highlight" id="result-highlight"></div>
+        </div>
+      </div>
+      <div class="result-actions">
+        <button id="btn-rematch" class="btn primary">再来一局</button>
+        <button id="btn-to-lobby" class="btn">返回房间</button>
+        <button id="btn-results-leave" class="btn ghost">离开房间</button>
+        <span id="result-wait" class="result-wait hidden">等待房主开始下一局…</span>
+      </div>
+    </div>
+  </section>
+
+  <div id="toasts" class="toasts"></div>
+  <div id="screen-fade" class="screen-fade"></div>
+</div>
+<script type="module" src="/app.js"></script>
+</body>
+</html>

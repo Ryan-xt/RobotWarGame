@@ -1,0 +1,24 @@
+{
+  "name": "wasteland-overload",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "废土过载 - 2-8人废土机甲竞技场乱斗 (LAN/online prototype)",
+  "scripts": {
+    "build": "node scripts/build.js",
+    "prestart": "node scripts/build.js",
+    "start": "node server/index.js",
+    "dev": "node scripts/build.js && node server/index.js",
+    "sim": "node scripts/simtest.js",
+    "smoke": "node scripts/uismoke.js && node scripts/gamesmoke.js",
+    "e2e": "node scripts/e2e.js"
+  },
+  "dependencies": {
+    "three": "0.186.1",
+    "ws": "8.22.0"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "linkedom": "^0.18.14"
+  }
+}
