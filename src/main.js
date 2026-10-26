@@ -1,4 +1,4 @@
-import { Stage } from './stage.js';
+import { createStage } from './stage.js';
 import { MenuScene } from './menuScene.js';
 import { Game } from './game.js';
 import { UI } from './ui.js';
@@ -26,35 +26,77 @@ if (!colorIds.includes(profile.colorId)) profile.colorId = 'orange';
 const settings = loadJSON(LS_SETTINGS, { volume: 70, quality: 'high', shake: true, hints: true });
 
 const canvas = document.getElementById('stage');
-const stage = new Stage(canvas);
-stage.setQuality(settings.quality);
+let stage;
+try {
+  stage = createStage(canvas, settings.quality);
+} catch (err) {
+  window.__bootShowError?.('渲染器初始化失败', err.message, err.stack);
+  throw err;
+}
+const is2D = stage.is3D === false;
+if (is2D) settings.quality = 'low';
 const audio = new AudioSys();
 audio.setVolume(settings.volume / 100);
-const menuScene = new MenuScene(stage);
+const menuScene = is2D
+  ? { setMech() {}, update() {}, dispose() {}, hero: null, scene: null }
+  : new MenuScene(stage);
 const colorHex = (id) => PLAYER_COLORS.find((c) => c.id === id)?.hex || PLAYER_COLORS[0].hex;
 menuScene.setMech(profile.mech, colorHex(profile.colorId));
 
 let view = 'menu';
 let lobbyOpen = false;
+let pendingAction = null;
+
+function reportClient(kind, err, extra = {}) {
+  const payload = {
+    kind,
+    msg: String(err && err.message || err || '').slice(0, 300),
+    stack: String(err && err.stack || '').split('\n').slice(0, 6).join(' | ').slice(0, 900),
+    where: extra.where || '',
+    view, connected: !!(net && net.connected),
+    ua: navigator.userAgent.slice(0, 120),
+    ...extra,
+  };
+  try {
+    const base = (typeof location !== 'undefined' && location.origin) || '';
+    fetch(base + '/api/log', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload),
+    }).catch(() => {});
+  } catch {}
+  return payload;
+}
 let session = null;
 try { session = JSON.parse(sessionStorage.getItem(SS_SESSION) || 'null'); } catch {}
+
+function guard(name, fn) {
+  if (!fn) return fn;
+  return (...args) => {
+    try {
+      return fn(...args);
+    } catch (err) {
+      reportClient('handler-fail', err, { where: name });
+      try { ui.toast('操作失败: ' + (err.message || name), 'err'); } catch {}
+      console.error('[handler]', name, err);
+    }
+  };
+}
 
 const ui = new UI({
   audio,
   handlers: {
-    onQuick: () => startQuickplay(),
-    onCreate: () => createRoom(),
-    onJoinOpen: () => { ui.openModal('modal-join'); net.send({ type: 'rooms' }); },
-    onJoinCode: (code) => joinRoom(code),
-    onJoinRoom: (code) => joinRoom(code),
-    onRefreshRooms: () => net.send({ type: 'rooms' }),
-    onConnectWs: (url) => connectServer(url),
-    onStart: () => net.send({ type: 'start' }),
-    onReady: (ready) => net.send({ type: 'setReady', ready }),
-    onLeave: () => leaveRoom(),
-    onRematch: () => net.send({ type: 'rematch' }),
-    onToLobby: () => { lobbyOpen = true; net.send({ type: 'toLobby' }); },
-    onChat: (text) => net.send({ type: 'chat', text }),
+    onQuick: guard('onQuick', () => startQuickplay()),
+    onCreate: guard('onCreate', () => createRoom()),
+    onJoinOpen: guard('onJoinOpen', () => { ui.openModal('modal-join'); net.send({ type: 'rooms' }); }),
+    onJoinCode: guard('onJoinCode', (code) => joinRoom(code)),
+    onJoinRoom: guard('onJoinRoom', (code) => joinRoom(code)),
+    onRefreshRooms: guard('onRefreshRooms', () => net.send({ type: 'rooms' })),
+    onConnectWs: guard('onConnectWs', (url) => connectServer(url)),
+    onStart: guard('onStart', () => net.send({ type: 'start' })),
+    onReady: guard('onReady', (ready) => net.send({ type: 'setReady', ready })),
+    onLeave: guard('onLeave', () => leaveRoom()),
+    onRematch: guard('onRematch', () => net.send({ type: 'rematch' })),
+    onToLobby: guard('onToLobby', () => { lobbyOpen = true; net.send({ type: 'toLobby' }); }),
+    onChat: guard('onChat', (text) => net.send({ type: 'chat', text })),
     onProfileChange: (p) => {
       Object.assign(profile, p);
       saveJSON(LS_PROFILE, profile);
@@ -76,39 +118,59 @@ const ui = new UI({
     onSettingsSave: (s) => {
       Object.assign(settings, s);
       saveJSON(LS_SETTINGS, settings);
-      stage.setQuality(settings.quality);
+      stage.setQuality(is2D ? 'low' : settings.quality);
       ui.applySettings(settings);
       audio.setVolume(settings.volume / 100);
       if (game.running) {
-        game.stage?.setQuality(settings.quality);
+        game.stage?.setQuality(is2D ? 'low' : settings.quality);
         game.arenaView?.setQuality(settings.quality);
         game.fx?.setQuality(settings.quality);
       }
     },
-    onToggleAudio: () => ui.toggleAudio(),
-    onResume: () => resumeSession(),
+    onToggleAudio: guard('onToggleAudio', () => ui.toggleAudio()),
+    onResume: guard('onResume', () => resumeSession()),
   },
 });
 ui.applyProfile(profile);
 ui.applySettings(settings);
 ui.setMechanic(profile.mech, true);
 ui.showLoading();
+setLoaderStatus('正在连接 ' + Net.defaultUrl());
 ui.setConnection('offline', '正在连接主机');
 ui.setServerUrl(Net.defaultUrl());
 if (session?.token) ui.setResumeAvailable(true);
+
+window.addEventListener('error', (e) => {
+  reportClient('window-error', e.error || e.message, { where: `${e.filename || ''}:${e.lineno || 0}` });
+  try { ui.toast('脚本错误: ' + (e.message || 'unknown'), 'err'); } catch {}
+});
+window.addEventListener('unhandledrejection', (e) => {
+  reportClient('unhandled-rejection', e.reason);
+  try { ui.toast('异常: ' + String(e.reason && e.reason.message || e.reason), 'err'); } catch {}
+});
 
 const game = new Game({
   stage, audio, ui,
   send: (msg) => net.send(msg),
 });
+if (is2D) {
+  stage.attach({
+    game,
+    getMode: () => view,
+    getProfile: () => ({ mech: profile.mech, color: colorHex(profile.colorId) }),
+  });
+  setTimeout(() => ui.toast('显卡/预览不支持 WebGL · 已切换到 2D 俯视模式', 'err'), 1200);
+}
 
 // ------------------------------------------------------------------ network
 const net = new Net({
   onMessage: (msg) => handleMessage(msg),
   onStatus: (status, extra) => {
     if (status === 'open') {
+      setLoaderStatus('主机已连接 · 正在同步房间');
       ui.setConnection('online', '主机在线');
       ui.showDisconnect(false);
+      setNetBanner(false);
       if (wasConnected) {
         ui.toast('已重新连接主机', 'ok');
         if (session?.token) net.send({ type: 'resume', token: session.token });
@@ -116,11 +178,16 @@ const net = new Net({
       net.send({ type: 'rooms' });
     } else if (status === 'connecting') {
       ui.setConnection('offline', '正在连接主机');
+      if (view === 'menu') setNetBanner(true, '正在连接主机 ' + (net.url || '') + ' …');
     } else if (status === 'retrying') {
+      setLoaderStatus('连不上主机，正在重试（' + net.retry + '）', true);
       ui.setConnection('offline', '信号中断，重连中');
+      if (view === 'menu') setNetBanner(true, '信号中断，正在重连（第 ' + net.retry + ' 次）…');
       if (view === 'game') ui.showDisconnect(true, `第 ${net.retry} 次重试…`);
     } else if (status === 'closed') {
+      setLoaderStatus('无法连接 ' + (net.url || '') + ' · 检查主机或点重试', true);
       ui.setConnection('offline', '主机离线');
+      if (view !== 'game') setNetBanner(true, '连不上 ' + (net.url || '') + ' · 点重试，或确认服务已启动');
       if (view === 'game') ui.showDisconnect(true, '检查主机是否仍在运行');
     }
   },
@@ -136,17 +203,28 @@ function onFirstConnect() {
 
 ui.setConnection('offline', '正在连接主机');
 net.connect(Net.defaultUrl());
+const loaderRetry = document.getElementById('loader-retry');
+if (loaderRetry) {
+  loaderRetry.classList.remove('hidden');
+  loaderRetry.onclick = () => {
+    setLoaderStatus('正在重试连接…');
+    net.close(); net.retry = 0; net.connect(Net.defaultUrl());
+  };
+}
+const retryBtn = document.getElementById('btn-net-retry');
+if (retryBtn) retryBtn.onclick = () => { setNetBanner(true, '正在重试…'); net.close(); net.retry = 0; net.connect(Net.defaultUrl()); };
 
 // never trap the player on the loading screen if the host is unreachable
 setTimeout(() => {
   if (ui.screenLoading && !ui.screenLoading.classList.contains('hidden')) {
     ui.hideLoading();
-    ui.toast('未连上主机 · 可在“加入房间”里填写主机地址', 'err');
+    if (!net.connected) ui.toast('未连上主机 · 可在“加入房间”里填写主机地址', 'err');
   }
-}, 6500);
+}, 2600);
 
 // expose for menu-scene quality etc.
-window.__overload = { net, game, ui, stage, menuScene };
+window.__bootOK = true;
+window.__overload = { net, game, ui, stage, menuScene, is2D };
 
 // ------------------------------------------------------------------ messages
 function handleMessage(msg) {
@@ -156,6 +234,8 @@ function handleMessage(msg) {
       ui.setConnection('online', '主机在线');
       onFirstConnect();
       net.send({ type: 'hello', profile });
+      reportClient('connected', null, { where: 'welcome', renderer: is2D ? '2d' : 'webgl', quality: stage.quality });
+      if (pendingAction) { const a = pendingAction; pendingAction = null; setTimeout(() => runPending(a), 80); }
       break;
     }
     case 'rooms': {
@@ -195,12 +275,24 @@ function handleMessage(msg) {
       game.setRoomCode(msg.roomCode || ui.currentRoom?.code || '----');
       game.isHost = ui.currentRoom ? ui.currentRoom.host === net.clientId : game.isHost;
       ui.showDisconnect(false);
-      game.start(msg);
+      try {
+        game.start(msg);
+        reportClient('match-started', null, { where: 'start', arena: msg.arena?.size, players: msg.players?.length });
+      } catch (err) {
+        reportClient('start-fail', err, { where: 'game.start' });
+        ui.showError('进入战场失败: ' + err.message);
+        console.error(err);
+      }
       ui.setResumeAvailable(true);
       break;
     }
     case 'snapshot': {
-      game.onSnapshot(msg.snap, msg.you);
+      try {
+        game.onSnapshot(msg.snap, msg.you);
+      } catch (err) {
+        reportClient('snapshot-fail', err, { where: 'game.onSnapshot' });
+        console.error(err);
+      }
       break;
     }
     case 'matchEnd': {
@@ -227,9 +319,37 @@ function handleMessage(msg) {
 }
 
 // ------------------------------------------------------------------ actions
+function setLoaderStatus(text, isErr = false) {
+  const el = document.getElementById('loader-status');
+  if (!el) return;
+  el.textContent = text;
+  el.classList.toggle('err', !!isErr);
+}
+
+function setNetBanner(on, text = '') {
+  const el = document.getElementById('net-banner');
+  if (!el) return;
+  el.classList.toggle('hidden', !on);
+  if (text) document.getElementById('net-banner-text').textContent = text;
+}
+
+function runPending(action) {
+  if (action === 'quick') startQuickplay();
+}
+
+function safeAudio() {
+  try { audio.resume(); } catch (e) { reportClient('audio-fail', e); }
+}
+
 function startQuickplay() {
-  audio.resume();
-  if (!net.connected) { net.connect(); ui.toast('正在连接主机…'); return; }
+  safeAudio();
+  if (!net.connected) {
+    pendingAction = 'quick';
+    ui.toast('正在连接主机 · 连上后自动开战…');
+    ui.setConnection('offline', '正在连接主机');
+    net.connect();
+    return;
+  }
   if (ui.currentRoom) net.send({ type: 'leave' });
   clearSession();
   ui.fade(true);
@@ -241,10 +361,11 @@ function startQuickplay() {
     settings: { mode: 'ffa', bots: 3, eventRate: 'med', heatRate: 'standard', difficulty: 'normal', mapSize: 'auto' },
   });
   ui.toast('正在接线 · 一场混战即将开始');
+  reportClient('quickplay-sent');
 }
 
 function createRoom() {
-  audio.resume();
+  safeAudio();
   if (!net.connected) { net.connect(); ui.toast('正在连接主机…'); return; }
   if (ui.currentRoom) net.send({ type: 'leave' });
   lobbyOpen = true;
@@ -256,7 +377,7 @@ function createRoom() {
 }
 
 function joinRoom(code) {
-  audio.resume();
+  safeAudio();
   if (!net.connected) { net.connect(); ui.toast('正在连接主机…'); return; }
   if (!code) return;
   ui.closeModal('modal-join');
@@ -310,15 +431,22 @@ let fpsFrames = 0, fpsTime = 0;
 function frame(now) {
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
-  if (view === 'menu' || view === 'lobby') {
-    menuScene.update(dt);
-    // keep the game scene alive behind results only; menu has no game
-  } else if (game.scene) {
-    game.update(dt);
-  } else {
-    menuScene.update(dt);
+  try {
+    if (view === 'menu' || view === 'lobby') {
+      menuScene.update(dt);
+    } else if (game.scene) {
+      game.update(dt);
+    } else {
+      menuScene.update(dt);
+    }
+    stage.render(dt);
+  } catch (err) {
+    if (!window.__frameErrAt || performance.now() - window.__frameErrAt > 3000) {
+      window.__frameErrAt = performance.now();
+      reportClient('frame-fail', err, { where: 'frame' });
+      try { ui.toast('渲染出错: ' + err.message, 'err'); } catch {}
+    }
   }
-  stage.render(dt);
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);

@@ -653,3 +653,64 @@ button { cursor: pointer; }
   .hud-bottom { bottom: 10px; }
   .tutorial { bottom: 168px; }
 }
+
+/* ---------------------------------------------------------------- net banner */
+#net-banner {
+  position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%);
+  z-index: 55; display: flex; align-items: center; gap: 12px;
+  padding: 10px 14px; max-width: min(560px, 92vw);
+  background: rgba(24, 12, 8, 0.94); border: 1px solid rgba(255, 120, 60, 0.55);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
+  color: #ffd9c4; font-size: 12.5px; letter-spacing: .04em;
+}
+#net-banner b { font-size: 12px; letter-spacing: .16em; text-transform: uppercase; color: #ff9a63; }
+#net-banner span { opacity: .85; line-height: 1.4; }
+#net-banner button { flex: none; }
+
+/* ------------------------------------------------------- boot guard / errors */
+.loader-status {
+  margin-top: 14px; font-size: 11px; letter-spacing: .12em; color: var(--faint);
+  font-family: var(--ui, monospace); text-transform: uppercase;
+}
+.loader-status.err { color: #ff8f6a; }
+.loader .btn.small { margin-top: 10px; pointer-events: auto; }
+
+#boot-error {
+  position: fixed; inset: 0; z-index: 200;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(4, 5, 6, .82); backdrop-filter: blur(3px);
+  padding: 20px;
+}
+#boot-error .be-card {
+  width: min(620px, 94vw); max-height: 88vh; overflow: auto;
+  background: linear-gradient(180deg, #14181a, #0b0d0e);
+  border: 1px solid rgba(255, 120, 60, .45);
+  box-shadow: 0 30px 80px rgba(0,0,0,.7);
+  padding: 20px 22px 18px;
+}
+#boot-error .be-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+#boot-error .be-mark {
+  width: 24px; height: 24px; display: grid; place-items: center;
+  border: 1px solid #ff7a4a; color: #ff9d72; font-weight: 700; font-size: 14px;
+}
+#boot-error .be-head b { font-size: 15px; letter-spacing: .08em; color: #ffd9c4; }
+#boot-error p { font-size: 12.5px; line-height: 1.65; color: #d7d2c8; white-space: pre-wrap; margin: 0 0 10px; }
+#boot-error pre {
+  font-size: 10.5px; line-height: 1.5; color: #8e8779; white-space: pre-wrap;
+  background: rgba(0,0,0,.4); border: 1px solid rgba(255,255,255,.06);
+  padding: 9px 11px; max-height: 190px; overflow: auto; margin: 0 0 14px;
+}
+#boot-error .be-actions { display: flex; gap: 10px; margin-bottom: 10px; }
+#boot-error .be-hint { font-size: 10.5px; line-height: 1.6; color: var(--faint); }
+
+/* --------------------------------------------------------- click feedback */
+.click-ripple {
+  position: fixed; z-index: 300; width: 8px; height: 8px; margin: -4px 0 0 -4px;
+  border-radius: 50%; border: 1px solid rgba(255, 210, 140, .95);
+  background: rgba(255, 200, 120, .35);
+  pointer-events: none; animation: clickPulse .5s ease-out forwards;
+}
+@keyframes clickPulse {
+  0% { transform: scale(.6); opacity: 1; }
+  100% { transform: scale(4.2); opacity: 0; }
+}

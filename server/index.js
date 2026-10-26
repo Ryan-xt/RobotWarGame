@@ -35,6 +35,19 @@ const server = http.createServer((req, res) => {
   if (url.pathname === '/api/rooms') {
     return json(res, { rooms: roomManager.listPublic(), version: 1 });
   }
+  if (url.pathname === '/api/log') {
+    if (req.method === 'POST') {
+      readBody(req).then((body) => {
+        let payload = {};
+        try { payload = JSON.parse(body); } catch { payload = { raw: body.slice(0, 400) }; }
+        dlog('client-log', JSON.stringify(payload).slice(0, 1200));
+        json(res, { ok: true });
+      });
+      return;
+    }
+    res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' });
+    return res.end(debugLog.slice(-200).join('\n'));
+  }
   if (url.pathname === '/api/config') {
     return json(res, {
       colors: PLAYER_COLORS,
@@ -57,12 +70,30 @@ const server = http.createServer((req, res) => {
     }
     res.writeHead(200, {
       'Content-Type': MIME[path.extname(filePath).toLowerCase()] || 'application/octet-stream',
-      'Cache-Control': 'no-cache',
+      'Cache-Control': 'no-store',
       'Access-Control-Allow-Origin': '*',
     });
     res.end(data);
   });
 });
+
+const debugLog = [];
+function dlog(...args) {
+  const line = `[${new Date().toISOString().slice(11, 23)}] ${args.join(' ')}`;
+  console.log(line);
+  debugLog.push(line);
+  if (debugLog.length > 600) debugLog.shift();
+}
+globalThis.__dlog = dlog;
+
+function readBody(req, limit = 16384) {
+  return new Promise((resolve) => {
+    let data = '';
+    req.on('data', (c) => { data += c; if (data.length > limit) { data = data.slice(0, limit); req.destroy(); } });
+    req.on('end', () => resolve(data));
+    req.on('error', () => resolve(data));
+  });
+}
 
 function json(res, obj) {
   const body = JSON.stringify(obj);
@@ -107,6 +138,7 @@ wss.on('connection', (ws, req) => {
   ws.msgCount = 0;
   ws.windowStart = Date.now();
   ws.profile = { name: '废土客' };
+  dlog('ws open', clientId, (req.headers['user-agent'] || '').slice(0, 70));
 
   ws.send(JSON.stringify({
     type: 'welcome',
@@ -123,10 +155,21 @@ wss.on('connection', (ws, req) => {
     let msg;
     try { msg = JSON.parse(raw.toString()); } catch { return; }
     if (!msg || typeof msg.type !== 'string') return;
-    handleMessage(ws, clientId, msg);
+    if (msg.type !== 'input' && msg.type !== 'ping') {
+      const extra = msg.type === 'createRoom' ? `autoStart=${!!msg.autoStart} mode=${msg.settings?.mode} bots=${msg.settings?.bots}`
+        : msg.type === 'join' ? `code=${msg.code}` : msg.type === 'chat' ? `text=${String(msg.text || '').slice(0, 30)}` : '';
+      dlog('recv', clientId, msg.type, extra);
+    }
+    try {
+      handleMessage(ws, clientId, msg);
+    } catch (e) {
+      dlog('ERROR handling', msg.type, e && e.message, (e && e.stack || '').split('\n').slice(0, 3).join(' | '));
+      io.send(clientId, { type: 'error', message: '服务器处理失败: ' + (e && e.message) });
+    }
   });
 
   ws.on('close', () => {
+    dlog('ws close', clientId);
     clients.delete(clientId);
     const room = roomManager.roomOf(clientId);
     if (room) {

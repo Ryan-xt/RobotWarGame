@@ -9,8 +9,27 @@
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
+  <!-- ======================== BOOT GUARD / ERRORS ======================== -->
+  <div id="boot-error" class="hidden">
+    <div class="be-card">
+      <div class="be-head"><span class="be-mark">!</span><b id="boot-error-title">启动失败</b></div>
+      <p id="boot-error-detail"></p>
+      <pre id="boot-error-stack"></pre>
+      <div class="be-actions">
+        <button id="boot-error-reload" class="btn primary">重新加载</button>
+        <button id="boot-error-close" class="btn ghost">先看看菜单</button>
+      </div>
+      <div class="be-hint">若多次失败：确认预览面板指向 3000 端口，或按 F12 在控制台看第一条红色报错。</div>
+    </div>
+  </div>
+
 <div id="app">
   <canvas id="stage"></canvas>
+  <div id="net-banner" class="hidden">
+    <b>未连接主机</b>
+    <span id="net-banner-text">正在尝试连接…</span>
+    <button id="btn-net-retry" class="btn small">重试</button>
+  </div>
   <div id="grain"></div>
   <div id="vignette"></div>
 
@@ -24,6 +43,8 @@
       <div class="loader-bar"><i></i></div>
       <div class="loader-txt">正在为过载核心接线<span class="blink">...</span></div>
       <div class="loader-tip">被击中不会掉血。掉的是理智。</div>
+      <div id="loader-status" class="loader-status">正在连接主机…</div>
+      <button id="loader-retry" class="btn small hidden">重试连接</button>
     </div>
   </section>
 
@@ -57,6 +78,7 @@
         <div class="btn-row">
           <button id="btn-help" class="btn ghost small">操作档案</button>
           <button id="btn-settings" class="btn ghost small">设置</button>
+          <button id="btn-diag" class="btn ghost small">诊断</button>
           <button id="btn-audio" class="btn ghost small icon-only" title="静音">🔊</button>
         </div>
       </div>
@@ -405,6 +427,143 @@
   <div id="toasts" class="toasts"></div>
   <div id="screen-fade" class="screen-fade"></div>
 </div>
-<script type="module" src="/app.js"></script>
+<script>
+  /* Runs before app.js: turns a dead boot into a readable message. */
+  (function () {
+    var shown = false;
+    function el(id) { return document.getElementById(id); }
+    function send(kind, msg, stack) {
+      try {
+        var body = JSON.stringify({ kind: kind, msg: String(msg || '').slice(0, 400), stack: String(stack || '').slice(0, 900), where: 'boot-guard', ua: navigator.userAgent.slice(0, 120), href: location.href });
+        fetch('/api/log', { method: 'POST', headers: { 'content-type': 'application/json' }, body: body }).catch(function () {});
+      } catch (e) {}
+    }
+    function show(title, detail, stack) {
+      if (shown) return;
+      shown = true;
+      var box = el('boot-error');
+      if (!box) return;
+      box.classList.remove('hidden');
+      el('boot-error-title').textContent = title;
+      el('boot-error-detail').textContent = detail || '';
+      el('boot-error-stack').textContent = stack || '';
+      var reload = el('boot-error-reload');
+      if (reload) reload.onclick = function () { location.reload(); };
+      var close = el('boot-error-close');
+      if (close) close.onclick = function () { box.classList.add('hidden'); };
+    }
+    window.__bootShowError = show;
+    /* Click telemetry: proves whether the DOM receives clicks at all. */
+    var clicks = 0;
+    document.addEventListener('click', function (e) {
+      if (clicks++ > 25) return;
+      var t = e.target;
+      var id = (t && t.id) || (t && t.closest && (t.closest('button') || t.closest('[id]') || {}).id) || '';
+      var cls = (t && t.className && String(t.className).slice(0, 40)) || '';
+      send('click-report', 'id=' + id + ' cls=' + cls + ' tag=' + (t && t.tagName) + ' bootOK=' + !!window.__bootOK);
+    }, true);
+    window.addEventListener('error', function (e) {
+      if (e && e.target && e.target.tagName === 'SCRIPT') {
+        show('脚本加载失败', 'app.js 没能加载：' + (e.target.src || ''), '检查 /app.js 是否可访问（HTTP 200）。');
+        send('script-load-fail', e.target.src);
+        return;
+      }
+      if (!e) return;
+      show('启动时出错', (e.message || 'unknown') + ' @ ' + (e.filename || '') + ':' + (e.lineno || 0), e.error && e.error.stack);
+      send('boot-error', e.message, e.error && e.error.stack);
+    }, true);
+    window.addEventListener('unhandledrejection', function (e) {
+      var r = e && e.reason;
+      show('运行异常', String((r && r.message) || r), r && r.stack);
+      send('boot-rejection', (r && r.message) || r, r && r.stack);
+    });
+    setTimeout(function () {
+      if (!window.__bootOK && !shown) {
+        show('游戏脚本没有运行', '页面已加载，但 app.js 6 秒内没有启动。多半是 WebGL 初始化失败，或脚本被拦截。', location.href);
+        send('boot-timeout', 'no __bootOK after 6s', location.href);
+      }
+    }, 6000);
+  })();
+</script>
+<script type="module" src="/app.js?v=5"></script>
+<script>
+  /* ---- click feedback + self diagnostic panel ---------------------------- */
+  (function () {
+    var clicks = 0;
+    var lastClick = '';
+    var lastErr = '';
+
+    window.addEventListener('error', function (e) { lastErr = (e && e.message) || lastErr; });
+
+    document.addEventListener('click', function (e) {
+      clicks++;
+      var t = e.target || {};
+      lastClick = (t.id || t.className || t.tagName || '?') + ' @' + Math.round(e.clientX) + ',' + Math.round(e.clientY);
+      var d = document.createElement('div');
+      d.className = 'click-ripple';
+      d.style.left = e.clientX + 'px';
+      d.style.top = e.clientY + 'px';
+      document.body.appendChild(d);
+      setTimeout(function () { d.remove(); }, 520);
+    }, true);
+
+    function lines() {
+      var app = window.__overload || {};
+      var net = app.net || {};
+      var stage = app.stage || {};
+      var ui = app.ui || {};
+      var gl = null, glErr = '';
+      try {
+        var c = document.createElement('canvas');
+        gl = c.getContext('webgl2') || c.getContext('webgl') || c.getContext('experimental-webgl');
+      } catch (err) { glErr = err.message; }
+      var screens = ['loading', 'menu', 'lobby', 'game', 'results'].filter(function (n) {
+        var el = document.getElementById('screen-' + n);
+        return el && !el.classList.contains('hidden');
+      }).join(',') || '(none)';
+      return [
+        '脚本启动 __bootOK      : ' + (window.__bootOK ? '是' : '否 ← 说明 app.js 没跑起来'),
+        '游戏对象 __overload    : ' + (window.__overload ? '已创建' : '未创建'),
+        '渲染模式               : ' + (stage.is3D === false ? 'Canvas2D 兼容模式' : (stage.is3D ? 'WebGL 3D' : '未知')),
+        'WebGL 上下文           : ' + (gl ? '可用' : '不可用 ' + glErr),
+        '画质档位               : ' + (stage.quality || '-'),
+        'WebSocket 已连接       : ' + (net.connected ? '是' : '否'),
+        'WebSocket 地址         : ' + (net.url || '-'),
+        '重连次数               : ' + (net.retry || 0),
+        '当前屏幕               : ' + screens,
+        '房间码                 : ' + ((ui.currentRoom && ui.currentRoom.code) || '-'),
+        '对局运行中             : ' + (app.game && app.game.running ? '是' : '否'),
+        '点击次数               : ' + clicks + '  最近: ' + (lastClick || '-'),
+        '窗口尺寸 / DPR         : ' + window.innerWidth + '×' + window.innerHeight + ' @' + (window.devicePixelRatio || 1),
+        '最后脚本错误           : ' + (lastErr || '无'),
+        '页面地址               : ' + location.href,
+        'UA                     : ' + navigator.userAgent,
+      ].join('\n');
+    }
+
+    function showDiag() {
+      var box = document.getElementById('boot-error');
+      if (!box) return;
+      box.classList.remove('hidden');
+      document.getElementById('boot-error-title').textContent = '运行诊断';
+      document.getElementById('boot-error-detail').textContent = lines();
+      document.getElementById('boot-error-stack').textContent = '';
+      try {
+        fetch('/api/log', {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ kind: 'diag', msg: lines().slice(0, 3000), where: 'diag' }),
+        }).catch(function () {});
+      } catch (e) {}
+    }
+    window.__diag = showDiag;
+    window.__diagLines = lines;
+
+    var btn = document.getElementById('btn-diag');
+    if (btn) btn.addEventListener('click', function (e) { e.preventDefault(); showDiag(); });
+
+    /* Escape hatch: ?diag=1 opens the panel immediately. */
+    if (/[?&]diag=1/.test(location.search)) setTimeout(showDiag, 1500);
+  })();
+</script>
 </body>
 </html>

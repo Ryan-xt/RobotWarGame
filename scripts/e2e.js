@@ -37,7 +37,9 @@ async function waitUntil(fn, ms = 8000, label = 'condition') {
     if (fn()) return true;
     await sleep(40);
   }
-  throw new Error('timeout waiting for ' + label);
+  const diag = typeof errors !== 'undefined' && errors.length ? '\nconsole: ' + errors.join('\n') : '';
+  const netState = globalThis.window?.__overload?.net;
+  throw new Error('timeout waiting for ' + label + diag + (netState ? `\nnet: connected=${netState.connected} url=${netState.url} retry=${netState.retry}` : ''));
 }
 
 let failures = 0;
@@ -49,7 +51,7 @@ await waitForServer();
 
 // ---------------------------------------------------------------- dom + net
 const { window, document } = setupDOM();
-Object.defineProperty(globalThis, 'location', { value: { protocol: 'http:', host: `127.0.0.1:${PORT}`, search: '' }, configurable: true });
+Object.defineProperty(globalThis, 'location', { value: { protocol: 'http:', host: `127.0.0.1:${PORT}`, origin: `http://127.0.0.1:${PORT}`, search: '' }, configurable: true });
 Object.defineProperty(window, 'location', { value: globalThis.location, configurable: true });
 globalThis.WebSocket = WebSocketClient;
 globalThis.fetch = fetch;
@@ -71,7 +73,8 @@ await build({
           setQuality(q) { this.quality = q; }
           resize() {}
           render() {}
-        }`,
+        }
+        export function createStage() { return new Stage(); }`,
         loader: 'js',
       }));
     },

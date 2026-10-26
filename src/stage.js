@@ -3,13 +3,36 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { Stage2D } from './stage2d.js';
 
 export class Stage {
   constructor(canvas) {
     this.canvas = canvas;
-    this.renderer = new THREE.WebGLRenderer({
-      canvas, antialias: true, powerPreference: 'high-performance', alpha: false, stencil: false,
-    });
+    this.is3D = true;
+    // Some embedded previews / blocklisted GPUs reject WebGL; try a couple of
+    // option sets before giving up so we can fall back to the 2D renderer.
+    const attempts = [
+      { antialias: true, powerPreference: 'high-performance', alpha: false, stencil: false },
+      { antialias: false, powerPreference: 'default', alpha: false, stencil: false, failIfMajorPerformanceCaveat: false },
+      { antialias: false, alpha: false, depth: true, stencil: false, preserveDrawingBuffer: false },
+    ];
+    let renderer = null;
+    let lastErr = null;
+    for (const opts of attempts) {
+      try {
+        renderer = new THREE.WebGLRenderer({ canvas, ...opts });
+        break;
+      } catch (err) {
+        lastErr = err;
+      }
+    }
+    if (!renderer) {
+      const reason = (lastErr && lastErr.message) || 'WebGL 不可用';
+      const err = new Error('WebGL 初始化失败: ' + reason);
+      err.webglFailure = true;
+      throw err;
+    }
+    this.renderer = renderer;
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.7));
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -67,5 +90,23 @@ export class Stage {
     } else {
       this.renderer.render(this.scene, this.camera);
     }
+  }
+}
+
+// ---------------------------------------------------------------------------- 
+// Factory: prefer WebGL (3D), fall back to the Canvas2D renderer when the
+// browser/preview refuses a WebGL context. Both share the Stage API.
+export function createStage(canvas, quality = 'high') {
+  try {
+    const stage = new Stage(canvas);
+    stage.setQuality(quality);
+    return stage;
+  } catch (err) {
+    if (!err || !err.webglFailure) throw err;
+    console.warn('[stage] WebGL unavailable, using the 2D fallback renderer:', err.message);
+    const stage = new Stage2D(canvas);
+    stage.setQuality('low');
+    stage.fallbackReason = err.message;
+    return stage;
   }
 }
