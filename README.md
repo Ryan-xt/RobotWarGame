@@ -16,6 +16,9 @@ npm run dev          # 构建 public/app.js 并启动服务器
 
 打开 <http://localhost:3000>。
 
+- **第一次玩**：点菜单里的「新手教程」。它在本地跑一局练习（不连服务器），
+  六步带你走完移动 → 开火 → 冲刺 → 技能 → 过载散热 → 道具，两个训练靶站着不动给你打，
+  每一步做完自动打勾，随时可以「跳过这一步」或「退出教程」。
 - **单机/试玩**：点「快速开战」，AI 会立刻补齐对手。
 - **和朋友玩（同一局域网）**：主机运行 `npm run dev`，把终端里打印的 `局域网: http://192.168.x.x:3000`
   发给朋友；朋友打开后点「加入房间」→ 填房间码，或直接贴主机地址（默认同源，无需填写）。
@@ -24,6 +27,23 @@ npm run dev          # 构建 public/app.js 并启动服务器
 
 > 服务器监听 `0.0.0.0`。端口可用 `PORT=8080 npm run dev` 修改。
 > 防火墙需要放行该端口，WebSocket 与页面同源。
+
+---
+
+## 新手教程
+
+菜单第二行「新手教程」，点进去就是一局本地练习场（不需要联网，也不会影响战绩）：
+
+| 步骤 | 你要做的事 |
+| --- | --- |
+| 1 走路 | WASD 走够 8 米 |
+| 2 开火 | 瞄住训练靶按住左键，把它打到短路爆炸 |
+| 3 冲刺 | 空格两次，冲刺瞬间无敌 |
+| 4 技能 | 右键放出你机体的技能 |
+| 5 过载 | 连射把热量顶到 75 以上，再走进散热区压回 35 以下 |
+| 6 道具 | 走过去捡起地上的超频器，按 E 使用 |
+
+左上角面板会实时打勾，底部有「跳过这一步」和「退出教程」。全部完成后可以一键「开始对战」。
 
 ---
 
@@ -133,8 +153,10 @@ public/     index.html / style.css（构建产物 app.js 不提交）
 npm run sim     # 地形确定性、8 机完整对局、6 台机体技能、事件/短路/重生/破墙、结算称号
 npm run nettest    # 自己的机甲：假网络下的移动手感回归（LAT=120 JITTER=45 FIRE=1）
 npm run botmotion  # 别人/AI 的机甲：远程插值平滑度回归（LAT/JITTER/FPS/HITCH）
+npm run bulletmotion  # 子弹插值（LAT/JITTER/FPS，冻结帧 ≤2%、跳变 ≤2%）
+npm run tutorialtest  # 新手教程：六步全部走完 + 面板勾选 + 退出清理
 npm run smoke   # linkedom 无头 UI + 游戏层（需要 npm i -D linkedom，已列入 devDependencies）
-npm run e2e     # 真服务器 + 真 WebSocket + 真 main.js/UI/Game（WebGL 打桩）：快速开战/重连/大厅
+npm run e2e     # 真服务器 + 真 WebSocket + 真 main.js/UI/Game（WebGL 打桩）：快速开战/重连/大厅/教程
 node scripts/protocoltest.js   # 先起服务器；原始协议回归（可选）
 ```
 

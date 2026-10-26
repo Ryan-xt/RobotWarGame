@@ -799,6 +799,7 @@ export class Game {
   // ------------------------------------------------------------------ bullets
   syncBullets(list) {
     const seen = new Set();
+    const t = typeof this.snap?.t === 'number' ? this.snap.t : this.remoteClock;
     for (const b of list) {
       seen.add(b.id);
       let mesh = this.bullets.get(b.id);
@@ -808,12 +809,21 @@ export class Game {
         mesh.x = b.x; mesh.z = b.z;
       }
       mesh.seenAt = performance.now();
-      mesh.targetX = b.x; mesh.targetZ = b.z;
       mesh.vx = b.vx; mesh.vz = b.vz;
-      if (Math.hypot(mesh.x - b.x, mesh.z - b.z) > 1.2) { mesh.x = b.x; mesh.z = b.z; }
+      mesh.type = b.type;
+      mesh.charged = b.charged;
+      // Same treatment as remote mechs: keep the samples and interpolate.
+      // Extrapolating from the newest packet and pulling back towards it is
+      // what made a 18 m/s bolt advance in 0.9 m hops.
+      const samples = mesh.samples;
+      const last = samples[samples.length - 1];
+      if (!last || t > last.t) {
+        samples.push({ t, x: b.x, z: b.z, vx: b.vx, vz: b.vz });
+        if (samples.length > 10) samples.shift();
+      }
     }
     for (const [id, mesh] of this.bullets) {
-      if (!seen.has(id) && mesh.seenAt < performance.now() - 120) this.removeBullet(mesh);
+      mesh.gone = !seen.has(id);
     }
   }
 
@@ -835,7 +845,10 @@ export class Game {
     trail.position.x = -(b.type === 'rail' ? 1.2 : 0.44);
     g.add(trail);
     this.scene.add(g);
-    return { group: g, x: b.x, z: b.z, vx: b.vx, vz: b.vz, type: b.type, colour, core, trail, seenAt: performance.now() };
+    return {
+      group: g, x: b.x, z: b.z, vx: b.vx, vz: b.vz, type: b.type, charged: b.charged,
+      colour, core, trail, seenAt: performance.now(), samples: [],
+    };
   }
 
   removeBullet(mesh) {
@@ -848,21 +861,73 @@ export class Game {
     for (const [id, m] of this.bullets) if (m === mesh) this.bullets.delete(id);
   }
 
+  /**
+   * Position of a bolt at render time `rt`, from its sample history.
+   *
+   * Bolts fly straight between bounces, so between two samples plain
+   * interpolation is exact; outside the history we continue along the segment
+   * direction (never along `mesh.vx`, which is the *latest* velocity and flips
+   * at a bounce — using it made a bolt that bounced right after spawning jump
+   * to the far side of its last sample).
+   */
+  sampleBullet(mesh, rt) {
+    const s = mesh.samples;
+    const n = s.length;
+    if (!n) return null;
+    const first = s[0];
+    const last = s[n - 1];
+    const speed = Math.hypot(last.vx, last.vz) || Math.hypot(mesh.vx, mesh.vz) || BULLET.speed;
+
+    if (rt >= last.t) {
+      let ux = last.vx;
+      let uz = last.vz;
+      if (n > 1) { ux = last.x - s[n - 2].x; uz = last.z - s[n - 2].z; }
+      const len = Math.hypot(ux, uz) || 1;
+      const ahead = clamp(rt - last.t, 0, 0.2);
+      return { x: last.x + (ux / len) * speed * ahead, z: last.z + (uz / len) * speed * ahead, dirX: ux, dirZ: uz };
+    }
+    if (rt <= first.t) {
+      let ux = first.vx;
+      let uz = first.vz;
+      if (n > 1) { ux = s[1].x - first.x; uz = s[1].z - first.z; }
+      const len = Math.hypot(ux, uz) || 1;
+      // before our oldest sample: run the shot back towards the muzzle rather
+      // than parking it until the render clock catches up
+      const back = Math.max(-0.4, rt - first.t);
+      return { x: first.x + (ux / len) * speed * back, z: first.z + (uz / len) * speed * back, dirX: ux, dirZ: uz };
+    }
+    let i = n - 1;
+    while (i > 0 && s[i].t > rt) i--;
+    const a = s[i];
+    const b = s[i + 1] || a;
+    const f = b.t > a.t ? clamp((rt - a.t) / (b.t - a.t), 0, 1) : 0;
+    const x = a.x + (b.x - a.x) * f;
+    const z = a.z + (b.z - a.z) * f;
+    return { x, z, dirX: b.x - a.x, dirZ: b.z - a.z };
+  }
+
   updateBullets(dt) {
+    const rt = this.remoteClock;
     for (const mesh of this.bullets.values()) {
       if (!this.clientArena) continue;
-      // local flight with a gentle pull toward the last authoritative sample
-      mesh.x += mesh.vx * dt;
-      mesh.z += mesh.vz * dt;
-      const k = 1 - Math.exp(-dt * 14);
-      mesh.x += (mesh.targetX - mesh.x) * k;
-      mesh.z += (mesh.targetZ - mesh.z) * k;
+      const p = this.sampleBullet(mesh, rt);
+      if (!p) continue;
+      // The server stopped listing it (hit, expired). Keep drawing it until
+      // the render clock reaches the last sample we got, then drop it — the
+      // old wall-clock timer removed bolts before they had visibly reached
+      // their target, because the client draws a little in the past.
+      const last = mesh.samples[mesh.samples.length - 1];
+      if (mesh.gone && (rt >= last.t + 0.02 || this.time - last.t > 3)) {
+        this.removeBullet(mesh);
+        continue;
+      }
       const half = this.half - 0.2;
-      if (Math.abs(mesh.x) > half) mesh.x = Math.sign(mesh.x) * half;
-      if (Math.abs(mesh.z) > half) mesh.z = Math.sign(mesh.z) * half;
-      mesh.group.position.set(mesh.x, 0.95, mesh.z);
-      const ang = Math.atan2(mesh.vz, mesh.vx);
-      mesh.group.rotation.y = -ang;
+      const x = Math.abs(p.x) > half ? Math.sign(p.x) * half : p.x;
+      const z = Math.abs(p.z) > half ? Math.sign(p.z) * half : p.z;
+      mesh.x = x; mesh.z = z;
+      mesh.rendered = true;
+      mesh.group.position.set(x, 0.95, z);
+      mesh.group.rotation.y = -Math.atan2(p.dirZ, p.dirX);
     }
   }
 

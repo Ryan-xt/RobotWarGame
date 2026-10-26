@@ -4,11 +4,13 @@ import { Game } from './game.js';
 import { UI } from './ui.js';
 import { AudioSys } from './audio.js';
 import { Net, normalizeWsUrl } from './net.js';
+import { Tutorial } from './tutorial.js';
 import { PLAYER_COLORS } from '../shared/constants.js';
 import { mechOf } from '../shared/mechs.js';
 
 const LS_PROFILE = 'overload.profile.v1';
 const LS_SETTINGS = 'overload.settings.v1';
+const LS_TUTORIAL = 'overload.tutorial.v1';
 const SS_SESSION = 'overload.session.v1';
 
 function loadJSON(key, fallback) {
@@ -99,6 +101,11 @@ const ui = new UI({
   audio,
   handlers: {
     onQuick: guard('onQuick', () => startQuickplay()),
+    onTutorial: guard('onTutorial', () => startTutorial()),
+    onTutorialSkip: guard('onTutorialSkip', () => tutorial.skipStep()),
+    onTutorialExit: guard('onTutorialExit', () => exitTutorial()),
+    onTutorialFight: guard('onTutorialFight', () => { exitTutorial(); startQuickplay(); }),
+    onTutorialMenu: guard('onTutorialMenu', () => exitTutorial()),
     onCreate: guard('onCreate', () => createRoom()),
     onJoinOpen: guard('onJoinOpen', () => { ui.openModal('modal-join'); net.send({ type: 'rooms' }); }),
     onJoinCode: guard('onJoinCode', (code) => joinRoom(code)),
@@ -172,6 +179,9 @@ const game = new Game({
   stage, audio, ui,
   send: (msg) => net.send(msg),
 });
+
+// 新手教程：本地跑一份 MatchSim，不连服务器（见 src/tutorial.js）
+const tutorial = new Tutorial({ game, ui, audio, profile });
 if (is2D) {
   stage.attach({
     game,
@@ -241,9 +251,12 @@ setTimeout(() => {
   }
 }, 2600);
 
+// first visit: point a new player at the tutorial once the menu is on screen
+nudgeTutorial();
+
 // expose for menu-scene quality etc.
 window.__bootOK = true;
-window.__overload = { net, game, ui, stage, menuScene, is2D };
+window.__overload = { net, game, ui, stage, menuScene, is2D, tutorial };
 
 // ------------------------------------------------------------------ messages
 function handleMessage(msg) {
@@ -338,6 +351,19 @@ function handleMessage(msg) {
 }
 
 // ------------------------------------------------------------------ actions
+// A first-time player gets one nudge towards the tutorial (and never again).
+function tutorialDone() {
+  return !!loadJSON(LS_TUTORIAL, {}).done;
+}
+
+function nudgeTutorial() {
+  ui.setTutorialButtonDone?.(tutorialDone());
+  if (tutorialDone()) return;
+  setTimeout(() => {
+    const onMenu = view === 'menu' && ui.screenMenu && !ui.screenMenu.classList.contains('hidden');
+    if (onMenu) ui.toast('第一次来？点「新手教程」，2 分钟学会怎么打', 'ok');
+  }, 2200);
+}
 // In-game quality switch: one click cycles 高 → 中 → 低 → 高 and persists.
 function cycleQuality() {
   const order = ['high', 'med', 'low'];
@@ -373,6 +399,44 @@ function runPending(action) {
 
 function safeAudio() {
   try { audio.resume(); } catch (e) { reportClient('audio-fail', e); }
+}
+
+function startTutorial() {
+  safeAudio();
+  if (view === 'game' && tutorial.active) return;
+  if (ui.currentRoom) { net.send({ type: 'leave' }); ui.currentRoom = null; }
+  clearSession();
+  ui.fade(true);
+  setTimeout(() => ui.fade(false), 380);
+  view = 'game';
+  ui.showScreen('game');
+  try {
+    tutorial.start({
+      onFinish: () => {
+        saveJSON(LS_TUTORIAL, { done: true, at: Date.now() });
+        ui.setTutorialButtonDone?.(true);
+        reportClient('tutorial-done');
+      },
+      onExit: () => {},
+    });
+    reportClient('tutorial-start');
+  } catch (err) {
+    reportClient('tutorial-fail', err);
+    ui.showError('教程启动失败: ' + (err.message || err));
+    console.error(err);
+    exitTutorial();
+  }
+}
+
+function exitTutorial() {
+  const wasActive = tutorial.active;
+  if (wasActive) tutorial.exit();
+  ui.hideTutorial?.();
+  game.disposeWorld();
+  view = 'menu';
+  ui.showScreen('menu');
+  menuScene.setMech(profile.mech, colorHex(profile.colorId));
+  if (wasActive) reportClient('tutorial-exit');
 }
 
 function startQuickplay() {
@@ -421,6 +485,7 @@ function joinRoom(code) {
 }
 
 function leaveRoom() {
+  if (tutorial.active) { exitTutorial(); return; }
   net.send({ type: 'leave' });
   lobbyOpen = false;
   session = null;
@@ -481,6 +546,7 @@ function frame(now) {
     if (view === 'menu' || view === 'lobby') {
       menuScene.update(dt);
     } else if (game.scene) {
+      if (tutorial.active) tutorial.update(dt);
       game.update(dt);
     } else {
       menuScene.update(dt);

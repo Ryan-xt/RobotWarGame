@@ -158,6 +158,11 @@ export class UI {
       };
     };
     tap('btn-quick', () => h.onQuick?.());
+    tap('btn-tutorial', () => h.onTutorial?.());
+    tap('btn-tut-skip', () => h.onTutorialSkip?.());
+    tap('btn-tut-exit', () => h.onTutorialExit?.());
+    tap('btn-tut-fight', () => h.onTutorialFight?.());
+    tap('btn-tut-menu', () => h.onTutorialMenu?.());
     tap('btn-create', () => h.onCreate?.());
     tap('btn-join', () => h.onJoinOpen?.());
     tap('btn-help', () => this.openModal('modal-help'));
@@ -543,7 +548,7 @@ export class UI {
     this.lastSnapshot = snap;
     const timeLeft = snap.timeLeft ?? 0;
     // DOM writes are the most expensive part of the HUD: skip unchanged nodes.
-    const timeText = fmtTime(timeLeft);
+    const timeText = this.tutorialMode ? '训练' : fmtTime(timeLeft);
     if (timeText !== this._timeText) {
       this._timeText = timeText;
       $('hud-time').textContent = timeText;
@@ -554,7 +559,8 @@ export class UI {
       this._timeClass = timeClass;
       $('hud-time').className = timeClass;
     }
-    const phase = snap.phase === 'countdown' ? '核心同步' : snap.storm ? '电磁风暴' : timeLeft <= 30 ? '最后 30 秒' : '混战进行中';
+    const phase = this.tutorialMode ? '训练场'
+      : snap.phase === 'countdown' ? '核心同步' : snap.storm ? '电磁风暴' : timeLeft <= 30 ? '最后 30 秒' : '混战进行中';
     if (phase !== this._phaseText) {
       this._phaseText = phase;
       $('hud-phase').textContent = phase;
@@ -848,6 +854,96 @@ export class UI {
   toggleTutorial(on) {
     $('tutorial').classList.toggle('hidden', !on);
     this.tutorialTimer = on ? 14 : 0;
+  }
+
+  // ------------------------------------------------------- 新手教程 (单机)
+  /** Menu button subtitle after the tutorial has been cleared once. */
+  setTutorialButtonDone(done) {
+    const btn = $('btn-tutorial');
+    if (!btn) return;
+    let small = btn.querySelector('small');
+    if (!small) {
+      small = document.createElement('small');
+      btn.appendChild(small);
+    }
+    small.textContent = done ? '已通关 · 想再练一次也可以' : '2 分钟学会五个按键 · 单机';
+    btn.classList.toggle('done', !!done);
+  }
+
+  setTutorialMode(on) {
+    this.tutorialMode = !!on;
+    this._timeText = null;
+    this._phaseText = null;
+    this._timeClass = null;
+  }
+
+  /** Render the step list and highlight step `index`. */
+  showTutorial(steps, index = 0) {
+    const panel = $('tut-panel');
+    if (!panel) return;
+    this.setTutorialMode(true);
+    $('hud-room').textContent = 'ROOM TUTORIAL';
+    $('hud-mode').textContent = '新手教程';
+    // the 10-second hint box would sit on top of the tutorial panel
+    $('tutorial')?.classList.add('hidden');
+    this.tutorialTimer = 0;
+    const list = $('tut-steps');
+    list.innerHTML = '';
+    steps.forEach((st, i) => {
+      const li = document.createElement('li');
+      li.className = 'tut-step' + (i < index ? ' done' : i === index ? ' active' : '');
+      const mark = document.createElement('span');
+      mark.className = 'tut-mark';
+      mark.textContent = i < index ? '✓' : String(i + 1);
+      const body = document.createElement('span');
+      body.className = 'tut-body';
+      const title = document.createElement('b');
+      title.textContent = st.title;
+      const keys = document.createElement('em');
+      keys.textContent = st.keys;
+      body.appendChild(title);
+      body.appendChild(keys);
+      li.appendChild(mark);
+      li.appendChild(body);
+      list.appendChild(li);
+    });
+    const st = steps[Math.min(index, steps.length - 1)];
+    const cur = $('tut-current');
+    if (cur && st) {
+      cur.innerHTML = '';
+      const t = document.createElement('p');
+      t.className = 'tut-text';
+      t.textContent = st.text;
+      const g = document.createElement('p');
+      g.className = 'tut-goal';
+      g.textContent = '目标：' + st.goal;
+      cur.appendChild(t);
+      cur.appendChild(g);
+    }
+    const count = $('tut-count');
+    if (count) count.textContent = `${Math.min(index + 1, steps.length)} / ${steps.length}`;
+    $('tut-done').classList.add('hidden');
+    panel.classList.remove('hidden');
+    // make sure the scoreboard/hints do not cover it
+    this.hideScoreboard?.();
+  }
+
+  completeTutorial() {
+    $('tut-panel')?.classList.add('hidden');
+    const done = $('tut-done');
+    if (done) done.classList.remove('hidden');
+  }
+
+  hideTutorial() {
+    $('tut-panel')?.classList.add('hidden');
+    $('tut-done')?.classList.add('hidden');
+    this.setTutorialMode(false);
+  }
+
+  hideScoreboard() {
+    if (!this.scoreboardOpen) return;
+    this.scoreboardOpen = false;
+    $('scoreboard')?.classList.add('hidden');
   }
 
   // ---------------------------------------------------------------- minimap

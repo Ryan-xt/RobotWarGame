@@ -88,6 +88,8 @@ export function updateBot(sim, p, dt) {
   const input = { mx: 0, mz: 0, aim: p.aim, fire: false, seq: 0 };
   const t = sim.t;
   if (!p.alive) return input;
+  // Training dummy (新手教程): stands still and never shoots back.
+  if (p.dummy) return input;
 
   // Channeling coolant: stand still.
   if (p.channelEnd > t) {

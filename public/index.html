@@ -73,6 +73,7 @@
           <span class="btn-text"><b>快速开战</b><small>1 人 + 3 台 AI · 立即接线</small></span>
           <span class="btn-corner"></span>
         </button>
+        <button id="btn-tutorial" class="btn"><span class="btn-text"><b>新手教程</b><small>2 分钟学会五个按键 · 单机</small></span></button>
         <button id="btn-create" class="btn"><span class="btn-text"><b>创建房间</b><small>设定模式 / AI / 事件频率</small></span></button>
         <button id="btn-join" class="btn"><span class="btn-text"><b>加入房间</b><small>房间码或局域网列表</small></span></button>
         <div class="btn-row">
@@ -281,6 +282,39 @@
     <div class="modal-card wide">
       <header><h3>机甲档案 · 废物利用指南</h3><button class="modal-x" data-close="modal-mechs">✕</button></header>
       <div id="mech-archive" class="archive-grid"></div>
+    </div>
+  </div>
+
+  <!-- ============================ 新手教程 ============================ -->
+  <div id="tut-panel" class="tut-panel hidden">
+    <div class="tut-head">
+      <span class="tut-title">新手教程</span>
+      <span id="tut-count" class="tut-count">1 / 6</span>
+    </div>
+    <ol id="tut-steps" class="tut-steps"></ol>
+    <div id="tut-current" class="tut-current"></div>
+    <div class="tut-actions">
+      <button id="btn-tut-skip" class="btn ghost tiny">跳过这一步</button>
+      <button id="btn-tut-exit" class="btn ghost tiny">退出教程</button>
+    </div>
+  </div>
+
+  <div id="tut-done" class="tut-done hidden">
+    <div class="tut-done-card">
+      <h3>教程完成</h3>
+      <p class="tut-done-sub">五个按键，就这么多。剩下的是角度和运气。</p>
+      <div class="tut-keys">
+        <div><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd><span>移动</span></div>
+        <div><kbd>左键</kbd><span>电磁弹 · 蓄力</span></div>
+        <div><kbd>右键</kbd><span>机甲技能</span></div>
+        <div><kbd>空格</kbd><span>冲刺闪避</span></div>
+        <div><kbd>E</kbd><span>使用道具</span></div>
+        <div><kbd>Tab</kbd><span>记分板</span></div>
+      </div>
+      <div class="tut-actions">
+        <button id="btn-tut-fight" class="btn primary">开始对战</button>
+        <button id="btn-tut-menu" class="btn ghost">返回菜单</button>
+      </div>
     </div>
   </div>
 

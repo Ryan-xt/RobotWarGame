@@ -52,7 +52,7 @@ export function createPlayer(info, index) {
 }
 
 export class MatchSim {
-  constructor({ arena, players, settings, seed, now = 0 }) {
+  constructor({ arena, players, settings, seed, now = 0, tutorial = false }) {
     this.arena = arena;
     this.arena.dynamicPlates = [];
     this.settings = settings;
@@ -83,6 +83,9 @@ export class MatchSim {
     this.nextEventAt = 16 + this.rng() * 6;
     this.nextItemAt = 5;
     this.itemSerial = 0;
+    // Practice/tutorial sims respawn instantly instead of making the player
+    // watch a 10 s timer (the server never sets this flag).
+    this.respawnTime = tutorial ? 1.6 : RESPAWN_TIME;
     this.airdrop = null;
     this.stormActive = false;
     this.eventBanner = null;
@@ -247,7 +250,7 @@ export class MatchSim {
     const radius = HEAT.explosionRadius * (isFurnace ? 1.5 : 1) * (opts.radiusMult || 1);
     p.alive = false;
     p.heat = 100;
-    p.respawnAt = this.t + RESPAWN_TIME;
+    p.respawnAt = this.t + (this.respawnTime || RESPAWN_TIME);
     p.stats.deaths++;
     p.stats.longestLife = Math.max(p.stats.longestLife, this.t - (p.spawnedAt || 0));
     p.channelEnd = 0; p.fuseEnd = 0; p.skillState = null; p.shieldUntil = 0;

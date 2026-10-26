@@ -140,6 +140,28 @@ await waitUntil(() => !app.ui.screenMenu.classList.contains('hidden'), 4000, 'ba
 ok(!app.ui.screenMenu.classList.contains('hidden'), 'leave returns to the menu');
 ok(app.game.scene === null, 'game world disposed on leave');
 
+// ---------------------------------------------------------------- 新手教程
+app.ui.handlers.onTutorial();
+await waitUntil(() => app.tutorial.active, 4000, 'tutorial start');
+ok(app.tutorial.active, 'the tutorial button starts a local tutorial');
+ok(app.game.running, 'the tutorial runs a local match');
+ok(!!document.querySelector('#tut-steps .tut-step.active'), 'the tutorial panel shows the active step');
+ok(/^1 \/ \d+$/.test(document.getElementById('tut-count').textContent), 'step counter starts at 1', document.getElementById('tut-count').textContent);
+await waitUntil(() => app.tutorial.sim?.phase === 'live', 6000, 'tutorial goes live');
+app.game.keys.add('d');
+await sleep(700);
+app.game.keys.clear();
+ok(app.tutorial.watch.moved > 2, 'walking counts towards the first step', app.tutorial.watch.moved.toFixed(1));
+const stepBefore = app.tutorial.stepIndex;
+const activeBefore = document.querySelector('#tut-steps .tut-step.active .tut-body b').textContent;
+document.getElementById('btn-tut-skip').onclick({ target: document.getElementById('btn-tut-skip') });
+const activeAfter = document.querySelector('#tut-steps .tut-step.active .tut-body b').textContent;
+ok(app.tutorial.stepIndex === stepBefore + 1 && activeAfter !== activeBefore,
+  '跳过这一步 advances the panel', `${activeBefore} → ${activeAfter}`);
+app.ui.handlers.onLeave();
+await waitUntil(() => !app.ui.screenMenu.classList.contains('hidden'), 4000, 'menu after tutorial');
+ok(!app.tutorial.active && app.game.scene === null, '退出教程 returns to the menu and disposes the world');
+
 // ---------------------------------------------------------------- lobby flow
 app.ui.handlers.onCreate();
 await waitUntil(() => !document.getElementById('screen-lobby').classList.contains('hidden'), 5000, 'lobby screen');
