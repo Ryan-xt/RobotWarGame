@@ -36,6 +36,8 @@ try {
 const is2D = stage.is3D === false;
 if (is2D) settings.quality = 'low';
 const audio = new AudioSys();
+// Escape hatch for machines with broken audio drivers: ?noaudio=1
+if (/[?&]noaudio=1/.test(location.search)) audio.enabled = false;
 audio.setVolume(settings.volume / 100);
 const menuScene = is2D
   ? { setMech() {}, update() {}, dispose() {}, hero: null, scene: null }

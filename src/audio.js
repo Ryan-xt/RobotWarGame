@@ -48,6 +48,7 @@ export class AudioSys {
   }
 
   resume() {
+    if (!this.enabled) return;
     try {
       if (!this.ctx) this.init();
       if (this.ctx && this.ctx.state === 'suspended') {
