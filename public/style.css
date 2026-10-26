@@ -738,7 +738,7 @@ body[data-quality="low"] .countdown { background: rgba(0,0,0,.35); }
 /* ------------------------------ 新手教程 ------------------------------ */
 .tut-panel {
   position: fixed; left: 24px; top: 100px;
-  z-index: 9; width: 272px; padding: 14px 16px 12px;
+  z-index: 26; width: 272px; padding: 14px 16px 12px;
   background: linear-gradient(180deg, rgba(14,17,18,.94), rgba(10,12,13,.9));
   border: 1px solid var(--line); border-left: 2px solid var(--amber);
   box-shadow: var(--shadow); backdrop-filter: blur(6px);
@@ -767,7 +767,7 @@ body[data-quality="low"] .countdown { background: rgba(0,0,0,.35); }
 .tut-actions { display: flex; gap: 8px; justify-content: flex-end; }
 
 .tut-done {
-  position: fixed; inset: 0; z-index: 30; display: grid; place-items: center;
+  position: fixed; inset: 0; z-index: 55; display: grid; place-items: center;
   background: rgba(4,6,7,.72); backdrop-filter: blur(3px); animation: fadeIn .3s ease;
 }
 .tut-done-card {
