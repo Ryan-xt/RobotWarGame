@@ -52,7 +52,10 @@ export class UI {
     this.init();
   }
 
-  click() { this.audio?.sfx('ui'); }
+  // Sound must never be able to swallow a click: the action always runs.
+  click() {
+    try { this.audio?.sfx('ui'); } catch (err) { console.warn('[ui] click sfx failed', err); }
+  }
 
   init() {
     this.screenLoading = $('screen-loading');
@@ -126,7 +129,17 @@ export class UI {
 
   bind() {
     const h = this.handlers;
-    const tap = (id, fn) => { const el = $(id); if (el) el.onclick = () => { this.click(); fn && fn(); }; };
+    const tap = (id, fn) => {
+      const el = $(id);
+      if (!el) return;
+      el.onclick = (ev) => {
+        try { this.click(); } catch (err) { console.warn('[ui] sfx failed', err); }
+        try { fn && fn(ev); } catch (err) {
+          console.error('[ui] handler failed for', id, err);
+          this.toast('操作失败: ' + (err && err.message || id), 'err');
+        }
+      };
+    };
     tap('btn-quick', () => h.onQuick?.());
     tap('btn-create', () => h.onCreate?.());
     tap('btn-join', () => h.onJoinOpen?.());
