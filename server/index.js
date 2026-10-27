@@ -1,4 +1,5 @@
 import http from 'node:http';
+import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -102,6 +103,10 @@ function json(res, obj) {
 }
 
 const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 64 * 1024 });
+// `ws` re-emits the http server's listen errors on its own emitter; without a
+// listener here a busy port killed the process with a raw stack trace instead
+// of reaching the friendly "port taken, trying the next one" path below.
+wss.on('error', () => {});
 
 const io = {
   send(clientId, msg) {
@@ -388,20 +393,84 @@ function handleMessage(ws, clientId, msg) {
   }
 }
 
-server.listen(PORT, '0.0.0.0', () => {
-  const nets = os.networkInterfaces();
-  const ips = [];
-  for (const list of Object.values(nets)) {
-    for (const net of list || []) {
-      if (net.family === 'IPv4' && !net.internal) ips.push(net.address);
-    }
+/**
+ * Open the game in the default browser — but only once the server is actually
+ * listening. `start.bat` used to launch the browser and the server at the same
+ * time, so on a first run (npm install + bundle) the tab opened onto
+ * "localhost refused to connect", which looks exactly like a broken game.
+ */
+function openBrowser(url) {
+  const enabled = process.env.OPEN_BROWSER === '1' || process.argv.includes('--open');
+  if (!enabled) return false;
+  try {
+    const cmd = process.platform === 'win32' ? 'cmd'
+      : process.platform === 'darwin' ? 'open' : 'xdg-open';
+    const args = process.platform === 'win32' ? ['/c', 'start', '', url] : [url];
+    spawn(cmd, args, { stdio: 'ignore', detached: true }).unref();
+    return true;
+  } catch {
+    return false;
   }
-  console.log('=====================================');
-  console.log('  废土过载 OVERLOAD — 服务器已启动');
-  console.log(`  本机:   http://localhost:${PORT}`);
-  for (const ip of ips) console.log(`  局域网: http://${ip}:${PORT}   （朋友用这个地址加入）`);
-  console.log(`  房间发现端口回退: IP 直连即可`);
-  console.log('=====================================');
-});
+}
+
+let announced = false;
+function startServer(port, attempt = 0) {
+  const onError = (err) => {
+    server.removeListener('error', onError);
+    // 3000 is a very popular port (other dev servers, Docker dashboards…).
+    // Falling back to the next free port beats dying with an English stack
+    // trace in a window the player is about to close.
+    const explicit = process.env.PORT != null && process.env.PORT !== '';
+    if (err.code === 'EADDRINUSE' && !explicit && attempt < 12) {
+      console.log(`  端口 ${port} 已被占用，改用 ${port + 1} …`);
+      startServer(port + 1, attempt + 1);
+      return;
+    }
+    console.error('');
+    console.error(`  启动失败：端口 ${port} 不能用（${err.code || err.message}）`);
+    if (err.code === 'EADDRINUSE') {
+      console.error('  这个端口被别的程序占着。关掉它，或者换一个端口：');
+      console.error(process.platform === 'win32'
+        ? '    set PORT=8080 && npm start'
+        : '    PORT=8080 npm start');
+    } else if (err.code === 'EACCES') {
+      console.error('  没有权限监听这个端口（1024 以下要管理员权限），换一个：PORT=8080');
+    }
+    console.error('');
+    process.exit(1);
+  };
+  server.once('error', onError);
+  // `listen()` callbacks are per-server, not per-attempt: after a retry the
+  // first (failed) attempt's callback still fires, so the URL is read back from
+  // the socket instead of the requested port, and only the first one prints.
+  server.listen(port, '0.0.0.0', () => {
+    server.removeListener('error', onError);
+    if (announced) return;
+    announced = true;
+    const boundPort = (server.address() && server.address().port) || port;
+    const nets = os.networkInterfaces();
+    const ips = [];
+    for (const list of Object.values(nets)) {
+      for (const net of list || []) {
+        if (net.family === 'IPv4' && !net.internal) ips.push(net.address);
+      }
+    }
+    const url = `http://localhost:${boundPort}`;
+    console.log('=====================================');
+    console.log('  废土过载 OVERLOAD — 服务器已启动');
+    console.log(`  本机:   ${url}`);
+    for (const ip of ips) console.log(`  局域网: http://${ip}:${boundPort}   （朋友用这个地址加入）`);
+    console.log('  房间发现端口回退: IP 直连即可');
+    console.log('=====================================');
+    if (!fs.existsSync(path.join(PUBLIC, 'app.js'))) {
+      console.log('  [!] public/app.js 不存在：先运行 npm run build（npm start 会自动做）');
+    }
+    const opened = openBrowser(url);
+    console.log(opened ? '  已在浏览器里打开；关掉这个窗口就是关掉服务器。'
+      : `  用浏览器打开 ${url} ；关掉这个窗口就是关掉服务器。`);
+  });
+}
+
+startServer(PORT);
 
 process.on('SIGINT', () => { console.log('\nbye'); process.exit(0); });

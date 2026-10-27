@@ -248,6 +248,26 @@ qBtn.onclick({ target: qBtn });
 ok(app.stage.quality === qBefore, 'three clicks cycle back to the original preset', `${qBefore} → ${qAfter} → ${app.stage.quality}`);
 
 console.log(errors.length ? 'CONSOLE ERRORS:\n' + errors.join('\n') : 'no console errors');
+// ---------------------------------------------------------------- startup UX
+// "localhost refused to connect" is what a player sees when the server died on
+// startup with a raw stack trace. A busy port with an explicit PORT must end in
+// a readable Chinese message and a non-zero exit code; without an explicit PORT
+// the server walks to the next free port instead (checked below).
+{
+  const child = spawn(process.execPath, ['server/index.js'], {
+    cwd: new URL('..', import.meta.url).pathname,
+    env: { ...process.env, PORT: String(PORT), OPEN_BROWSER: '0' },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let out = '';
+  child.stdout.on('data', (d) => { out += d; });
+  child.stderr.on('data', (d) => { out += d; });
+  const code = await new Promise((resolve) => child.on('exit', resolve));
+  ok(code === 1, '占用端口时以非零码退出，不会假装启动成功', `exit ${code}`);
+  ok(/启动失败/.test(out) && /端口/.test(out), '并且打印中文原因与换端口的办法', out.trim().split('\n').slice(0, 2).join(' / '));
+  ok(!/\bat .*node:internal/.test(out), '不再把英文堆栈拍给玩家', '');
+}
+
 const pass = failures === 0 && errors.length === 0;
 console.log(pass ? 'E2E OK' : `E2E FAILED (${failures})`);
 server.kill('SIGTERM');
