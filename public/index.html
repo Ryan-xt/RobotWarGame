@@ -74,10 +74,12 @@
           <span class="btn-corner"></span>
         </button>
         <button id="btn-tutorial" class="btn"><span class="btn-text"><b>新手教程</b><small>2 分钟学会五个按键 · 单机</small></span></button>
+        <button id="btn-training" class="btn"><span class="btn-text"><b>进阶训练</b><small>和 2 台会还手的 AI 练走位 · 练完就能打赢</small></span></button>
         <button id="btn-create" class="btn"><span class="btn-text"><b>创建房间</b><small>设定模式 / AI / 事件频率</small></span></button>
         <button id="btn-join" class="btn"><span class="btn-text"><b>加入房间</b><small>房间码或局域网列表</small></span></button>
         <div class="btn-row">
           <button id="btn-help" class="btn ghost small">操作档案</button>
+          <button id="btn-fieldguide" class="btn ghost small">战场图鉴</button>
           <button id="btn-settings" class="btn ghost small">设置</button>
           <button id="btn-diag" class="btn ghost small">诊断</button>
           <button id="btn-audio" class="btn ghost small icon-only" title="静音">🔊</button>
@@ -275,6 +277,32 @@
       </div>
       <div class="help-tips">
         <span>别站在酸液里。</span><span>反弹 2 次后伤害更高。</span><span>散热区会暴露位置。</span><span>最后 30 秒电磁风暴加速过载。</span>
+      </div>
+      <div class="help-more"><button id="btn-fieldguide-2" class="btn ghost small">战场图鉴 · 环境里都有什么</button></div>
+    </div>
+  </div>
+
+  <div id="modal-field" class="modal hidden">
+    <div class="modal-card wide">
+      <header><h3>战场图鉴 · 环境里都有什么</h3><button class="modal-x" data-close="modal-field">✕</button></header>
+      <div class="help-grid">
+        <div class="help-item"><span class="field-dot" style="background:#46d9ff"></span><b>散热区（蓝色光圈）</b><p>踩进去每秒降温 18 度，是自然散热的 7 倍。被追打时就往这里跑，但站在里面会暴露位置。</p></div>
+        <div class="help-item"><span class="field-dot" style="background:#9dff57"></span><b>酸液洼地（绿色）</b><p>踩上去每秒升温 6 度并且减速，别走进去；把对手逼进去是免费的伤害。</p></div>
+        <div class="help-item"><span class="field-dot" style="background:#ffd05a"></span><b>电磁塔</b><p>每隔约 4 秒充能放电，塔下的红色范围会被电 +11 过载。绕开塔基，或者把敌人往塔边引。</p></div>
+        <div class="help-item"><span class="field-dot" style="background:#d2c4a0"></span><b>可破坏铁皮墙</b><p>被打 3 下会塌（同时变成残骸掩体），能挡子弹也能被打穿。躲子弹靠它，别把墙打光。</p></div>
+        <div class="help-item"><span class="field-dot" style="background:#ffe08a"></span><b>反弹钢板</b><p>斜着打会把电磁弹弹出去，反弹后 +18% 伤害。绕柱打反弹弹是这台游戏的核心技巧。</p></div>
+        <div class="help-item"><span class="field-dot" style="background:#b88bff"></span><b>中央高台</b><p>场地正中央的圆形平台，空投和「清空过载」都在这里刷新，打架最凶的地方。</p></div>
+        <div class="help-item"><span class="field-dot" style="background:#ffb02e"></span><b>补给台 / 地面道具</b><p>地上会旋转发光的就是道具，走过去自动捡，按 E 使用。每 6–9 秒补一个，也会直接掉在你脚边。</p></div>
+        <div class="help-item"><span class="field-dot" style="background:#ff8a1f"></span><b>空投</b><p>全图公告后中央落箱：清空过载 / 超频器 / 冷却罐。抢到的人往往会翻盘。</p></div>
+        <div class="help-item"><span class="field-dot" style="background:#ff4b3a"></span><b>机械臂落点</b><p>地上的红圈：1.1 秒后砸下并麻痹，圈内必躲。同时是最好用的封走位工具。</p></div>
+        <div class="help-item"><span class="field-dot" style="background:#5ad8ff"></span><b>电磁风暴区</b><p>随机放电区，站在里面持续升温。地图上蓝色边框的圈就是。</p></div>
+        <div class="help-item"><span class="field-dot" style="background:#8fe9ff"></span><b>冷却液泄漏</b><p>事件生成的浅蓝水洼：减速，但会持续降温，烫得厉害时可以故意踩进去。</p></div>
+        <div class="help-item"><span class="field-dot" style="background:#c9b08a"></span><b>沙尘暴</b><p>事件期间能见度下降、远处看不清，适合贴脸打或者偷偷抢道具。</p></div>
+        <div class="help-item"><span class="field-dot" style="background:#ffffff"></span><b>出生点 / 重生</b><p>短路后 10 秒在场地外圈重生，重生有 2 秒无敌。别在原地等死。</p></div>
+        <div class="help-item"><span class="field-dot" style="background:#ff5bc8"></span><b>小地图</b><p>右上角：蓝点是你、其他颜色是敌人、绿色是散热区、黄点是道具，红点是警报。</p></div>
+      </div>
+      <div class="help-tips">
+        <span>中弹只升温，不掉血。</span><span>热量 100 才短路爆炸。</span><span>看到脚下红弧就按空格。</span><span>地上亮圈 = 道具。</span>
       </div>
     </div>
   </div>

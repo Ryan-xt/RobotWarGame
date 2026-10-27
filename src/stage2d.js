@@ -541,13 +541,14 @@ export class Stage2D {
       ctx.beginPath(); ctx.arc(x, y, 9, 0, TAU); ctx.stroke();
     }
 
-    // bullets with short trails
+    // bullets with short trails, in the shooter's colour
+    const bulletOwnerColor = new Map((snap?.players || []).map((p) => [p.id, p.color]));
     for (const b of snap?.bullets || []) {
       const [x, y] = P(b.x, b.z);
       const sp = Math.hypot(b.vx || 0, b.vz || 0) || 1;
       const tx = x - (b.vx / sp) * 9;
       const ty = y - (b.vz / sp) * 9;
-      ctx.strokeStyle = b.charged ? '#ffe9a8' : '#9fe9ff';
+      ctx.strokeStyle = bulletOwnerColor.get(b.owner) || (b.charged ? '#ffe9a8' : '#9fe9ff');
       ctx.lineWidth = b.charged ? 2.4 : 1.6;
       ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(x, y); ctx.stroke();
     }

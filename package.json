@@ -19,7 +19,9 @@
     "tutorialtest": "node scripts/tutorialtest.js",
     "bulletmotion": "node scripts/bulletmotion.js",
     "balance": "node scripts/balancetest.js",
-    "feel": "node scripts/feeltest.js"
+    "feel": "node scripts/feeltest.js",
+    "hit": "node scripts/hittest.js",
+    "training": "node scripts/trainingtest.js"
   },
   "dependencies": {
     "three": "0.186.1",

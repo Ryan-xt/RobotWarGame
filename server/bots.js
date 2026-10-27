@@ -160,7 +160,7 @@ export function updateBot(sim, p, dt) {
       const ttc = ((p.x - b.x) * b.vx + (p.z - b.z) * b.vz) / (sp * sp);
       if (ttc < 0 || ttc > 0.45) continue;
       const cx = b.x + b.vx * ttc, cz = b.z + b.vz * ttc;
-      if (dist(cx, cz, p.x, p.z) < 1.15 && Math.random() < 0.5) {
+      if (dist(cx, cz, p.x, p.z) < 1.15 && Math.random() < 0.2 + 0.28 * st.level) {
         p.pendingDash = true;
         st.dodgeAt = t + 0.8;
         const away = Math.atan2(p.z - b.z, p.x - b.x);
@@ -210,8 +210,12 @@ export function updateBot(sim, p, dt) {
       if (t <= st.burstUntil) {
         wantFire = true;
       } else if (t > st.pauseUntil) {
-        st.burstUntil = t + 0.5 + Math.random() * 0.9;
-        st.pauseUntil = st.burstUntil + 0.18 + Math.random() * 0.45;
+        // difficulty also shapes trigger discipline: easy bots fire shorter
+        // bursts and pause longer, so a new player gets room to breathe
+        const len = st.level < 1 ? 0.35 : 0.5;
+        const gap = st.level < 1 ? 0.55 : 0.18;
+        st.burstUntil = t + len + Math.random() * (st.level < 1 ? 0.6 : 0.9);
+        st.pauseUntil = st.burstUntil + gap + Math.random() * (st.level < 1 ? 0.9 : 0.45);
         wantFire = true;
       }
     }

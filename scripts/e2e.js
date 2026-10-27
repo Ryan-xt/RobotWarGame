@@ -162,6 +162,24 @@ app.ui.handlers.onLeave();
 await waitUntil(() => !app.ui.screenMenu.classList.contains('hidden'), 4000, 'menu after tutorial');
 ok(!app.tutorial.active && app.game.scene === null, '退出教程 returns to the menu and disposes the world');
 
+// ---------------------------------------------------------------- 进阶训练
+app.ui.handlers.onTraining();
+await waitUntil(() => app.tutorial.active && app.tutorial.mode === 'advanced', 4000, 'training start');
+ok(app.tutorial.mode === 'advanced', '进阶训练按钮启动进阶模式');
+ok(!!document.querySelector('#tut-steps .tut-step.active'), '进阶训练面板显示目标');
+ok(app.tutorial.steps.length === 5, '五步教学目标', String(app.tutorial.steps.length));
+ok(app.game.players.size === 3, '1 人 + 2 台 AI', String(app.game.players.size));
+document.getElementById('btn-tut-exit').onclick({ target: document.getElementById('btn-tut-exit') });
+await waitUntil(() => !app.ui.screenMenu.classList.contains('hidden'), 4000, 'menu after training');
+ok(!app.tutorial.active, '退出进阶训练回到菜单');
+
+// ---------------------------------------------------------------- 战场图鉴
+document.getElementById('btn-fieldguide').onclick({ target: document.getElementById('btn-fieldguide') });
+ok(!document.getElementById('modal-field').classList.contains('hidden'), '战场图鉴弹窗打开');
+ok(document.querySelectorAll('#modal-field .help-item').length >= 10, '图鉴列出环境要素',
+  String(document.querySelectorAll('#modal-field .help-item').length));
+app.ui.closeModal('modal-field');
+
 // ---------------------------------------------------------------- lobby flow
 app.ui.handlers.onCreate();
 await waitUntil(() => !document.getElementById('screen-lobby').classList.contains('hidden'), 5000, 'lobby screen');

@@ -115,6 +115,9 @@ export class MatchSim {
     };
     if (settings.heatRate === 'slow') this.scaling.heatMult *= 0.8;
     if (settings.heatRate === 'fast') this.scaling.heatMult *= 1.2;
+    // What the room's difficulty actually means: on 简单 the bots hit softer
+    // (not only less often), so a first-time player is not deleted instantly.
+    this.botHeatMult = settings.difficulty === 'easy' ? 0.72 : settings.difficulty === 'hard' ? 1.12 : 1;
     this.eventRateMult = settings.eventRate === 'low' ? 1.35 : settings.eventRate === 'high' ? 0.68 : 1;
     this.itemUsePulse = new Map();
     this._spawnAll();
@@ -232,7 +235,12 @@ export class MatchSim {
     }
     let mult = this.heatMultFor(p);
     if (opts.ignoreMult) mult = 1;
-    const applied = amount * mult;
+    let applied = amount * mult;
+    // AI difficulty scales how much a bot's hit costs (rooms with AI only)
+    if (attackerId != null && this.botHeatMult !== 1) {
+      const src = this.players.get(attackerId);
+      if (src && src.bot) applied *= this.botHeatMult;
+    }
     p.heat = Math.min(100, p.heat + applied);
     p.lastHeatAt = this.t;
     p.hitsTaken++;

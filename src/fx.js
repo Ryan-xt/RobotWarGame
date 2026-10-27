@@ -362,6 +362,21 @@ export class Fx {
     this.flash(x, y, z, color, 1.3, 0.12);
   }
 
+  /**
+   * Bullet impact: a bright core flash, a flat ring on the floor, sparks in the
+   * shooter's colour and a puff of dust. This is the "I hit something" moment —
+   * the old 7-particle spark was too small to read at 20 m.
+   */
+  impact(x, z, color = '#9fe9ff', opts = {}) {
+    const scale = opts.scale || 1;
+    this.flash(x, opts.y ?? 0.95, z, color, 2.6 * scale, 0.14);
+    this.ring(x, z, { color, r0: 0.18 * scale, r1: 1.35 * scale, life: 0.34, opacity: 0.9 });
+    this.sparkBurst(x, opts.y ?? 0.9, z, color, 14, 7.5, 1.05 * scale, 0.42);
+    this.sparkBurst(x, opts.y ?? 0.9, z, '#fff6e2', 5, 4.5, 0.7 * scale, 0.2);
+    this.smokePuff(x, 0.6, z, 3, '#6c6257', 0.7 * scale, 0.45, 0.5);
+    if (opts.bounced) this.flash(x, 1.0, z, '#b7ff9c', 3.4 * scale, 0.18);
+  }
+
   muzzle(x, y, z, color = '#8fe4ff') {
     this.flash(x, y, z, color, 0.7, 0.08);
     this.sparkBurst(x, y, z, color, 3, 3, 0.45, 0.2, { up: 0.4, lift: 0.5, gravity: 2 });

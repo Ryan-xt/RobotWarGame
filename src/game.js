@@ -61,6 +61,7 @@ export class Game {
     this.ghosts = [];
     this.threat = null;
     this.threatArc = null;
+    this.recentImpact = [];
     this.sendNow = false;
     this.time = 0;
     this.bindInputs();
@@ -99,6 +100,7 @@ export class Game {
     this.predAmmo = null;
     this.ghosts = [];
     this.threat = null;
+    this.recentImpact = [];
     this.inputHistory = [];
     this.localDash = { until: 0, dx: 0, dz: 0 };
     this.visOff = { x: 0, z: 0 };
@@ -598,10 +600,11 @@ export class Game {
         }
         case 'bounce':
           this.fx.bounce(e.x, e.z, e.n >= 2 ? '#ffe08a' : '#9fe9ff', 0.85);
+          this.fx.impact(e.x, e.z, e.n >= 2 ? '#b7ff9c' : '#9fe9ff', { scale: 0.55 });
           this.audio?.sfx('bounce', { pan: this.panFor(e.x), volume: this.volFor(e.x, e.z) * 0.8, n: e.n });
           break;
         case 'wallHit': {
-          this.fx.sparkBurst(e.x, 0.8, e.z, '#ffd9a0', 4, 3, 0.5, 0.3);
+          this.fx.impact(e.x, e.z, '#ffd9a0', { scale: 0.45 });
           break;
         }
         case 'wallBreak': {
@@ -619,14 +622,21 @@ export class Game {
         case 'heatHit': {
           const victim = byId.get(e.id);
           if (!victim) break;
-          this.fx.sparkBurst(e.x, 0.9, e.z, e.source === 'tower' ? '#9fe9ff' : '#ffb45c', 7, 5, 0.8, 0.45);
+          const attacker = e.attacker != null ? byId.get(e.attacker) : null;
+          const color = attacker?.color || (e.source === 'tower' ? '#9fe9ff' : '#ffb45c');
+          // the client already sparks when a bolt visually reaches a mech; do
+          // not double it when the authoritative event lands a moment later
+          const already = this.recentImpact && this.recentImpact.some(
+            (im) => Math.hypot(im.x - e.x, im.z - e.z) < 0.9 && this.time - im.t < 0.4);
+          if (!already) this.fx.impact(e.x, e.z, color, { bounced: e.bounced, scale: e.bounced ? 1.25 : 1 });
+          this.hitFlare(e.x, e.z, color, e.bounced);
           const dmg = Math.round(e.amount);
           if (e.attacker === this.myId && e.id !== this.myId) {
             this.ui.hitmarker(dmg >= 20);
             this.floatWorld(victim.x, 1.8, victim.z, '+' + dmg, e.bounced ? 'bounce' : 'dmg');
             this.audio?.sfx('hit', { pan: this.panFor(victim.x), volume: 0.9 });
           } else if (e.id === this.myId) {
-            this.floatWorld(victim.x, 1.8, victim.z, '+' + dmg, 'self');
+            this.floatWorld(victim.x, 1.9, victim.z, '+' + dmg, 'self');
             this.flashDamage(0.35);
             this.shake(0.18, victim.x, victim.z);
             this.audio?.sfx('hit', { pan: 0, volume: 0.8 });
@@ -840,6 +850,7 @@ export class Game {
       }
       mesh.seenAt = performance.now();
       mesh.owner = b.owner;
+      mesh.setColor?.(this.bulletColor(b));
       mesh.vx = b.vx; mesh.vz = b.vz;
       mesh.type = b.type;
       mesh.charged = b.charged;
@@ -858,9 +869,17 @@ export class Game {
     }
   }
 
+  /** Colour of whoever fired a bolt, falling back to the archetype colours. */
+  bulletColor(b) {
+    if (b.type === 'rail') return '#ff8fe6';
+    const v = b.owner != null ? this.players.get(b.owner) : null;
+    if (v && v.info && v.info.color) return v.info.color;
+    return b.charged ? '#ffd27a' : '#9fe9ff';
+  }
+
   makeBullet(b) {
     const g = new THREE.Group();
-    const colour = b.type === 'rail' ? '#ff8fe6' : b.charged ? '#ffd27a' : '#9fe9ff';
+    const colour = this.bulletColor(b);
     const core = new THREE.Mesh(
       new THREE.SphereGeometry(b.type === 'rail' ? 0.12 : 0.09, 8, 6),
       new THREE.MeshBasicMaterial({ color: '#ffffff' })
@@ -876,10 +895,19 @@ export class Game {
     trail.position.x = -(b.type === 'rail' ? 1.2 : 0.44);
     g.add(trail);
     this.scene.add(g);
-    return {
+    const mesh = {
       group: g, x: b.x, z: b.z, vx: b.vx, vz: b.vz, type: b.type, charged: b.charged,
-      owner: b.owner, colour, core, trail, seenAt: performance.now(), samples: [],
+      owner: b.owner, colour, core, trail, glow, seenAt: performance.now(), samples: [],
+      setColor: (c) => {
+        if (!c || mesh.colour === c) return;
+        mesh.colour = c;
+        glow.material.color.set(c);
+        trail.material.color.set(c);
+      },
     };
+    // charged / rail bolts stay readable: keep a little extra size
+    if (b.charged) { core.scale.setScalar(1.25); glow.scale.multiplyScalar(1.15); }
+    return mesh;
   }
 
   removeBullet(mesh) {
@@ -1030,7 +1058,46 @@ export class Game {
       mesh.rendered = true;
       mesh.group.position.set(x, 0.95, z);
       mesh.group.rotation.y = -Math.atan2(p.dirZ, p.dirX);
+      this.checkBulletContact(mesh, x, z);
     }
+    if (this.recentImpact.length) {
+      this.recentImpact = this.recentImpact.filter((im) => this.time - im.t < 0.6);
+    }
+  }
+
+  /**
+   * Does this bolt visually touch a mech right now?
+   *
+   * Bullets are drawn ~100 ms in the past, while `heatHit` events arrive with
+   * the network round trip: the authoritative spark can land after the bolt has
+   * already flown past, which is why hits felt invisible. Sparking locally the
+   * frame the tracer touches a chassis makes the hit read immediately; the
+   * authoritative event then only adds the number (impactNearby de-dupes).
+   */
+  checkBulletContact(mesh, x, z) {
+    if (mesh.impacted || mesh.ghost) return;
+    for (const v of this.players.values()) {
+      if (v.id === mesh.owner || !v.alive) continue;
+      const dx = v.x - x;
+      const dz = v.z - z;
+      if (dx * dx + dz * dz > 0.85 * 0.85) continue;
+      mesh.impacted = true;
+      this.hitFlare(x, z, mesh.colour, false);
+      this.fx.impact(x, z, mesh.colour, { scale: 0.85 });
+      this.recentImpact.push({ x, z, t: this.time });
+      if (this.recentImpact.length > 12) this.recentImpact.shift();
+      // stop drawing the tracer so it does not fly through the target
+      this.removeBullet(mesh);
+      return;
+    }
+  }
+
+  /** Short-lived bright halo at a hit point; own hits flash larger. */
+  hitFlare(x, z, color, big = true) {
+    if (!this.fx) return;
+    this.fx.flash(x, 1.0, z, color || '#fff3d8', big ? 3.6 : 2.2, big ? 0.16 : 0.1);
+    if (!big) return;
+    this.fx.ring(x, z, { color: color || '#fff3d8', r0: 0.2, r1: 1.8, life: 0.32 });
   }
 
   // ------------------------------------------------------------------ items
@@ -1437,7 +1504,8 @@ export class Game {
 
   /** Predicted bolt: pure eye candy, never authoritative. */
   spawnGhost(x, z, aim, charged) {
-    const g = this.makeBullet({ x, z, vx: Math.cos(aim) * (charged ? BULLET.chargedSpeed : BULLET.speed),
+    const g = this.makeBullet({ owner: this.myId,
+      x, z, vx: Math.cos(aim) * (charged ? BULLET.chargedSpeed : BULLET.speed),
       vz: Math.sin(aim) * (charged ? BULLET.chargedSpeed : BULLET.speed),
       type: 'bolt', charged });
     g.ghost = true;

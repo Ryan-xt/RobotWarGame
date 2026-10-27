@@ -160,6 +160,9 @@ export class UI {
     tap('btn-quick', () => h.onQuick?.());
     tap('btn-hud-help', () => this.openModal('modal-help'));
     tap('btn-tutorial', () => h.onTutorial?.());
+    tap('btn-training', () => h.onTraining?.());
+    tap('btn-fieldguide', () => this.openModal('modal-field'));
+    tap('btn-fieldguide-2', () => this.openModal('modal-field'));
     tap('btn-tut-skip', () => h.onTutorialSkip?.());
     tap('btn-tut-exit', () => h.onTutorialExit?.());
     tap('btn-tut-fight', () => h.onTutorialFight?.());
@@ -560,7 +563,7 @@ export class UI {
       this._timeClass = timeClass;
       $('hud-time').className = timeClass;
     }
-    const phase = this.tutorialMode ? '训练场'
+    const phase = this.tutorialMode ? (this.tutorialKind === 'advanced' ? '进阶训练' : '训练场')
       : snap.phase === 'countdown' ? '核心同步' : snap.storm ? '电磁风暴' : timeLeft <= 30 ? '最后 30 秒' : '混战进行中';
     if (phase !== this._phaseText) {
       this._phaseText = phase;
@@ -871,20 +874,33 @@ export class UI {
     btn.classList.toggle('done', !!done);
   }
 
-  setTutorialMode(on) {
+  /** Menu badge for 进阶训练 (cleared once). */
+  setTrainingButtonDone(done) {
+    const btn = $('btn-training');
+    if (!btn) return;
+    const small = btn.querySelector('small');
+    if (small) small.textContent = done ? '已通关 · 可以再来练手感' : '和 2 台会还手的 AI 练走位 · 练完就能打赢';
+    btn.classList.toggle('done', !!done);
+  }
+
+  setTutorialMode(on, mode = 'basic') {
     this.tutorialMode = !!on;
+    this.tutorialKind = mode;
+    const title = document.querySelector('#tut-panel .tut-title');
+    if (title) title.textContent = mode === 'advanced' ? '进阶训练' : '新手教程';
     this._timeText = null;
     this._phaseText = null;
     this._timeClass = null;
   }
 
   /** Render the step list and highlight step `index`. */
-  showTutorial(steps, index = 0) {
+  showTutorial(steps, index = 0, title = '新手教程') {
     const panel = $('tut-panel');
     if (!panel) return;
-    this.setTutorialMode(true);
-    $('hud-room').textContent = 'ROOM TUTORIAL';
-    $('hud-mode').textContent = '新手教程';
+    const advanced = title.includes('进阶');
+    this.setTutorialMode(true, advanced ? 'advanced' : 'basic');
+    $('hud-room').textContent = advanced ? 'ROOM TRAINING' : 'ROOM TUTORIAL';
+    $('hud-mode').textContent = title;
     // the 10-second hint box would sit on top of the tutorial panel
     $('tutorial')?.classList.add('hidden');
     this.tutorialTimer = 0;

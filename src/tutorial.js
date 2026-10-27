@@ -1,8 +1,11 @@
-// 新手教程：一局本地练习。
+// 教学 / 训练：一局本地练习。
 //
 // 不连服务器 —— 客户端直接跑一份 MatchSim（和服务器同一份代码），每帧把它当成
-// 「零延迟的快照」喂给渲染层，所以物理、过载、短路、道具全都是真实规则，
-// 只是对手换成了两个站着不动的训练靶。
+// 「零延迟的快照」喂给渲染层，所以物理、过载、短路、道具全都是真实规则。
+//
+// 两种模式：
+//   basic    —— 新手教程：两个站着不动的训练靶，六步认识按键和过载规则。
+//   advanced —— 进阶训练：两台会走会打的简单 AI，五步练走位/反弹/散热/补给/击杀。
 import { MatchSim } from '../server/sim.js';
 import { buildArena, arenaSummary, pointBlocked, hasLineOfSight } from '../shared/arena.js';
 
@@ -144,8 +147,68 @@ export const TUTORIAL_STEPS = [
   },
 ];
 
+const ADV_BOTS = [
+  { id: 'bot1', name: '训练机 · 甲', mech: 'assault', color: '#ff5b4a', colorId: 'red' },
+  { id: 'bot2', name: '训练机 · 乙', mech: 'sniper', color: '#ffd24a', colorId: 'amber' },
+];
+
+/** 进阶训练：面对会还手的 AI，练真正能赢的打法。 */
+export const ADVANCED_STEPS = [
+  {
+    id: 'dodge',
+    title: '冲刺躲弹',
+    keys: '空格 + 红色预警弧',
+    text: '脚下亮红弧 = 有子弹正朝你飞来。这时候按空格冲刺，冲刺前 0.12 秒无敌，' +
+      '可以白拿一次闪避。用冲刺躲开 2 次来袭就算过关。',
+    goal: '用冲刺躲过 2 次来袭',
+    tip: '别乱冲：看到红弧再冲，冲刺冷却 1.2 秒。',
+    done: (w) => w.dashDodges >= 2,
+  },
+  {
+    id: 'bounce',
+    title: '反弹弹',
+    keys: '左键 · 打墙',
+    text: '电磁弹能弹墙、弹钢板、弹护盾，反弹后伤害更高，而且能打到掩体后面的敌人。' +
+      '对着墙或钢板开火，让反弹弹命中 AI 一次。',
+    goal: '用反弹弹命中 1 次',
+    tip: '在废墟墙或钢板旁边斜着打，角度越小反弹越远。',
+    done: (w) => w.bounceHits >= 1,
+  },
+  {
+    id: 'cool',
+    title: '边打边降温',
+    keys: '蓝色散热区',
+    text: '热量 70 以上会被减速，90 以上一碰就炸。真正的赢法是：打一波 → 进散热区 → ' +
+      '热量回到 25 以下再出去。先把热量顶到 55，再降到 25 以下。',
+    goal: '热量到 55 后降到 25 以下',
+    tip: '散热区每秒降 18 度，比自然散热快 7 倍，但站在里面会暴露位置。',
+    done: (w) => w.heatPeaked && w.cooled,
+  },
+  {
+    id: 'item',
+    title: '抢补给',
+    keys: 'E',
+    text: '地上亮圈就是道具，AI 也会抢。走过去捡一个，按 E 用掉——' +
+      '冷却罐救命、超频器 15 秒爆发、手雷能把人从掩体后炸出来。',
+    goal: '捡起并使用 1 个道具',
+    tip: '被追着打时优先抢冷却罐；血量（热量）健康就抢超频器反打。',
+    done: (w) => w.itemsUsed >= 1,
+  },
+  {
+    id: 'kill',
+    title: '击倒 AI',
+    keys: '左键 + 技能',
+    text: '现在把它打爆：瞄准时把准星放在它移动方向的前面一点（预判提前量），' +
+      '它靠近就用右键技能，热量高了就退回散热区。击倒 1 台训练机过关。',
+    goal: '击倒 1 台 AI',
+    tip: '它绕着掩体走时，用反弹弹或者手雷把它逼出来。',
+    done: (w) => w.kills >= 1,
+  },
+];
+
 export class Tutorial {
-  constructor({ game, ui, audio, profile }) {
+  constructor({ game, ui, audio, profile, mode = 'basic' }) {
+    this.mode = mode;
     this.game = game;
     this.ui = ui;
     this.audio = audio;
@@ -167,7 +230,8 @@ export class Tutorial {
   }
 
   // --------------------------------------------------------------- lifecycle
-  start({ onFinish, onExit } = {}) {
+  start({ onFinish, onExit, mode = null } = {}) {
+    if (mode) this.mode = mode;
     this.onFinish = onFinish || null;
     this.onExit = onExit || null;
     this.active = true;
@@ -176,10 +240,16 @@ export class Tutorial {
     this.acc = 0;
     this.clock = 0;
     this.itemDropped = false;
+    const advanced = this.mode === 'advanced';
+    this.steps = advanced ? ADVANCED_STEPS : TUTORIAL_STEPS;
     this.watch = {
       moved: 0, kills: 0, dashes: 0, skills: 0, heatPeaked: false, cooled: false,
-      dead: 0, itemsUsed: 0, maxHeat: 0,
+      dead: 0, itemsUsed: 0, maxHeat: 0, bounceHits: 0, dashDodges: 0,
     };
+    this.bounceBase = 0;
+    this.lastDashAt = -9;
+    this.dashDodgeArmed = false;
+    this.rangeLabel = advanced ? '进阶训练' : '新手教程';
 
     const arena = buildArena(ARENA_SIZE, ARENA_SEED);
     const mechId = this.profile?.mech || 'assault';
@@ -191,9 +261,10 @@ export class Tutorial {
       mech: mechId,
       team: 0,
     };
+    const foes = advanced ? ADV_BOTS : DUMMIES;
     const infos = [
       meInfo,
-      ...DUMMIES.map((d) => ({ ...d, team: 1, bot: true, difficulty: 'easy' })),
+      ...foes.map((d) => ({ ...d, team: 1, bot: true, difficulty: 'easy' })),
     ];
     const settings = {
       mode: 'ffa', duration: 900, eventRate: 'low', heatRate: 'slow', difficulty: 'easy',
@@ -204,32 +275,55 @@ export class Tutorial {
     sim.endMatch = () => {};
     sim.nextEventAt = Infinity;
     sim.stormStart = Infinity;
-    sim.nextItemAt = Infinity; // no random pickups: the tutorial drops its own
+    // the basic tutorial drops its own single item; the advanced one plays with
+    // the real supply rhythm so抢补给 is actually practised
+    if (!advanced) sim.nextItemAt = Infinity;
     this.sim = sim;
 
-    // stand the player in open ground facing the dummies, with a cooling vent
-    // within walking distance (see planLayout)
-    const layout = planLayout(arena, sim);
-    this.layout = layout;
-    const me = sim.players.get(YOU);
-    me.x = layout.home.x;
-    me.z = layout.home.z;
-    me.aim = layout.aim;
-    me.facing = layout.aim;
-    me.vx = 0; me.vz = 0;
     this.dummyHome.clear();
     this.dummyAlive.clear();
-    DUMMIES.forEach((d, i) => {
-      const p = sim.players.get(d.id);
-      const spot = layout.spots[i];
-      p.dummy = true;
-      p.x = spot.x;
-      p.z = spot.z;
-      p.vx = 0; p.vz = 0;
-      p.aim = Math.atan2(me.z - p.z, me.x - p.x);
-      this.dummyHome.set(d.id, { x: p.x, z: p.z });
-      this.dummyAlive.set(d.id, true);
-    });
+    if (advanced) {
+      // real bots: let the arena place them; the player gets the spot with a
+      // cooling vent nearby so the "退回去降温" lesson is possible
+      const layout = planLayout(arena, sim);
+      this.layout = layout;
+      const me = sim.players.get(YOU);
+      me.x = layout.home.x;
+      me.z = layout.home.z;
+      me.aim = layout.aim;
+      me.facing = layout.aim;
+      me.vx = 0; me.vz = 0;
+      for (const d of ADV_BOTS) {
+        const p = sim.players.get(d.id);
+        if (!p) continue;
+        p.x = layout.home.x + (d.id === 'bot1' ? -9 : 9);
+        p.z = layout.home.z - (d.id === 'bot1' ? 2 : 6);
+        p.aim = Math.atan2(me.z - p.z, me.x - p.x);
+      }
+      this.bounceBase = me.stats.bounceHits || 0;
+    } else {
+      // stand the player in open ground facing the dummies, with a cooling vent
+      // within walking distance (see planLayout)
+      const layout = planLayout(arena, sim);
+      this.layout = layout;
+      const me = sim.players.get(YOU);
+      me.x = layout.home.x;
+      me.z = layout.home.z;
+      me.aim = layout.aim;
+      me.facing = layout.aim;
+      me.vx = 0; me.vz = 0;
+      DUMMIES.forEach((d, i) => {
+        const p = sim.players.get(d.id);
+        const spot = layout.spots[i];
+        p.dummy = true;
+        p.x = spot.x;
+        p.z = spot.z;
+        p.vx = 0; p.vz = 0;
+        p.aim = Math.atan2(me.z - p.z, me.x - p.x);
+        this.dummyHome.set(d.id, { x: p.x, z: p.z });
+        this.dummyAlive.set(d.id, true);
+      });
+    }
 
     // hand the render layer a normal "start" message
     const players = infos.map((p) => ({
@@ -240,7 +334,7 @@ export class Tutorial {
     this.game.send = (msg) => this.onInput(msg);
     this.game.start({
       type: 'start',
-      roomCode: 'TUTORIAL',
+      roomCode: advanced ? 'TRAINING' : 'TUTORIAL',
       arena: JSON.parse(JSON.stringify(arenaSummary(arena))),
       settings,
       seed: ARENA_SEED,
@@ -251,6 +345,7 @@ export class Tutorial {
       matchCount: 1,
     });
 
+    this.ui?.setTutorialMode?.(true, this.mode);
     this.setStep(0);
     this.pushSnapshot();
   }
@@ -301,6 +396,7 @@ export class Tutorial {
 
   /** Dummies stay where they were put, face the player and come back fast. */
   keepDummies(sim) {
+    if (this.mode === 'advanced') return;
     const me = sim.players.get(YOU);
     if (!me) return;
     for (const d of DUMMIES) {
@@ -346,28 +442,62 @@ export class Tutorial {
 
     // stats the sim keeps for us
     w.kills = me.stats.kills;
-    if (me.dashUntil > sim.t && !this.wasDashing) w.dashes++;
-    this.wasDashing = me.dashUntil > sim.t;
     if (me.skillCdUntil > (this.lastSkillCd || 0)) w.skills++;
     this.lastSkillCd = me.skillCdUntil;
     w.maxHeat = Math.max(w.maxHeat, Math.round(me.heat));
-    if (me.heat >= 70) w.heatPeaked = true;
-    if (w.heatPeaked && me.heat < 35) w.cooled = true;
+    const peakAt = this.mode === 'advanced' ? 55 : 70;
+    const coolAt = this.mode === 'advanced' ? 25 : 35;
+    if (me.heat >= peakAt) w.heatPeaked = true;
+    if (w.heatPeaked && me.heat < coolAt) w.cooled = true;
+
+    // bounce hits are cumulative on the player's stats; only ever grow, so a
+    // test / statistic reset can never un-complete a step
+    w.bounceHits = Math.max(w.bounceHits, (me.stats.bounceHits || 0) - (this.bounceBase || 0));
+
+    // dash dodge: a dash that starts while an enemy bolt is about to arrive
+    const nowDash = me.dashUntil > sim.t;
+    if (nowDash && !this.wasDashing) {
+      w.dashes++;
+      this.dashDodgeArmed = this.incomingSoon(sim, me, 0.45);
+    }
+    if (nowDash && this.dashDodgeArmed && !this.dashCounted) {
+      w.dashDodges++;
+      this.dashCounted = true;
+      this.ui?.toast?.('闪避成功 · 冲刺无敌帧躲掉了子弹', 'ok');
+    }
+    if (!nowDash) { this.dashCounted = false; this.dashDodgeArmed = false; }
+    this.wasDashing = nowDash;
 
     // items: picked up then used
     if (me.item) this.lastItem = me.item;
     else if (this.lastItem) { w.itemsUsed++; this.lastItem = null; }
 
-    const step = TUTORIAL_STEPS[this.stepIndex];
+    const step = this.steps[this.stepIndex];
     if (step && step.done(w)) {
       this.audio?.sfx?.('ui', { volume: 0.5 });
       this.goToStep(this.stepIndex + 1);
     }
   }
 
+  /** Is an enemy bolt going to reach `p` within `within` seconds? */
+  incomingSoon(sim, p, within = 0.45) {
+    for (const b of sim.bullets) {
+      if (b.owner === p.id) continue;
+      const d = Math.hypot(b.x - p.x, b.z - p.z);
+      if (d > 9) continue;
+      const sp = Math.hypot(b.vx, b.vz) || 1;
+      const ttc = ((p.x - b.x) * b.vx + (p.z - b.z) * b.vz) / (sp * sp);
+      if (ttc < -0.05 || ttc > within) continue;
+      const cx = b.x + b.vx * ttc;
+      const cz = b.z + b.vz * ttc;
+      if (Math.hypot(cx - p.x, cz - p.z) < 1.3) return true;
+    }
+    return false;
+  }
+
   /** Show step `index` and arm whatever it needs; past the last step = fin. */
   goToStep(index) {
-    if (index >= TUTORIAL_STEPS.length) {
+    if (index >= this.steps.length) {
       this.finished = true;
       this.heatBurst = null;
       this.ui?.completeTutorial?.();
@@ -379,11 +509,16 @@ export class Tutorial {
 
   setStep(index) {
     this.stepIndex = index;
-    const st = TUTORIAL_STEPS[index];
-    this.ui?.showTutorial?.(TUTORIAL_STEPS, index);
+    const st = this.steps[index];
+    this.ui?.showTutorial?.(this.steps, index, this.mode === 'advanced' ? '进阶训练' : '新手教程');
     if (!st || !this.sim) return;
     if (st.id === 'heat') this.armHeatBurst();
-    if (st.id === 'item' && !this.itemDropped) this.dropItem(this.sim, this.sim.players.get(YOU));
+    if (st.tip) this.ui?.toast?.(st.tip, 'ok');
+    // the basic tutorial hands you one item; the advanced one uses the real
+    // supply rhythm (bots steal drops, which is the lesson)
+    if (st.id === 'item' && this.mode !== 'advanced' && !this.itemDropped) {
+      this.dropItem(this.sim, this.sim.players.get(YOU));
+    }
   }
 
   // ------------------------------------------------------- 过载演示（第 5 步）

@@ -492,14 +492,16 @@ button { cursor: pointer; }
 .hitmarker::before, .hitmarker::after { content: ""; position: absolute; background: #fff3d8; box-shadow: 0 0 8px rgba(255,255,255,.6); }
 .hitmarker::before { left: 50%; top: 0; bottom: 0; width: 2px; margin-left: -1px; }
 .hitmarker::after { top: 50%; left: 0; right: 0; height: 2px; margin-top: -1px; }
-.hitmarker.show { animation: hm .22s ease; }
+.hitmarker.show { animation: hm .26s ease; }
+.hitmarker.show::before, .hitmarker.show::after { background: #ffd36a; box-shadow: 0 0 10px rgba(255, 190, 80, .95); }
 .hitmarker.kill { filter: hue-rotate(-40deg) saturate(2); }
 @keyframes hm { 0% { opacity: 1; transform: translate(-50%,-50%) rotate(45deg) scale(1.4) } 100% { opacity: 0; transform: translate(-50%,-50%) rotate(45deg) scale(.85) } }
 
 .floating-layer { position: fixed; inset: 0; pointer-events: none; z-index: 8; overflow: hidden; }
 .float { position: absolute; font-family: var(--ui); font-size: 16px; font-weight: 700; letter-spacing: .02em; color: #ffd9a0; text-shadow: 0 2px 6px #000, 0 0 16px rgba(255,150,60,.4); animation: floatUp .95s ease-out forwards; white-space: nowrap; }
 .float.dmg { color: #ffe3b3; }
-.float.self { color: #ff7a63; font-size: 19px; }
+.float.self { color: #ff7a63; font-size: 21px; }
+.float.dmg { font-size: 20px; text-shadow: 0 2px 8px #000, 0 0 18px rgba(255, 170, 70, .75); }
 .float.cool { color: #9ff2ff; }
 .float.bounce { color: #b7ff9c; }
 .float.big { font-size: 24px; }
@@ -793,3 +795,16 @@ body[data-quality="low"] .countdown { background: rgba(0,0,0,.35); }
 
 #btn-tutorial.done { border-color: rgba(157, 255, 87, .3); }
 #btn-tutorial.done small { color: rgba(157, 255, 87, .75); }
+
+/* ------------------------------ 战场图鉴 ------------------------------ */
+.field-dot {
+  display: inline-block; width: 9px; height: 9px; border-radius: 50%;
+  margin-right: 7px; vertical-align: middle; box-shadow: 0 0 10px currentColor;
+}
+.help-item b { display: inline; }
+.help-more { display: flex; justify-content: flex-end; margin-top: 12px; }
+
+/* 进阶训练按钮：和教程区分开 */
+#btn-training { border-color: rgba(70, 217, 255, .28); }
+#btn-training small { color: rgba(120, 220, 255, .8); }
+#btn-training.done small { color: rgba(157, 255, 87, .75); }

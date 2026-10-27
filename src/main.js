@@ -11,6 +11,7 @@ import { mechOf } from '../shared/mechs.js';
 const LS_PROFILE = 'overload.profile.v1';
 const LS_SETTINGS = 'overload.settings.v1';
 const LS_TUTORIAL = 'overload.tutorial.v1';
+const LS_TRAINING = 'overload.training.v1';
 const SS_SESSION = 'overload.session.v1';
 
 function loadJSON(key, fallback) {
@@ -101,7 +102,8 @@ const ui = new UI({
   audio,
   handlers: {
     onQuick: guard('onQuick', () => startQuickplay()),
-    onTutorial: guard('onTutorial', () => startTutorial()),
+    onTutorial: guard('onTutorial', () => startTutorial('basic')),
+    onTraining: guard('onTraining', () => startTutorial('advanced')),
     onTutorialSkip: guard('onTutorialSkip', () => tutorial.skipStep()),
     onTutorialExit: guard('onTutorialExit', () => exitTutorial()),
     onTutorialFight: guard('onTutorialFight', () => { exitTutorial(); startQuickplay(); }),
@@ -253,6 +255,7 @@ setTimeout(() => {
 
 // first visit: point a new player at the tutorial once the menu is on screen
 nudgeTutorial();
+refreshTrainingBadge();
 
 // expose for menu-scene quality etc.
 window.__bootOK = true;
@@ -401,7 +404,7 @@ function safeAudio() {
   try { audio.resume(); } catch (e) { reportClient('audio-fail', e); }
 }
 
-function startTutorial() {
+function startTutorial(mode = 'basic') {
   safeAudio();
   if (view === 'game' && tutorial.active) return;
   if (ui.currentRoom) { net.send({ type: 'leave' }); ui.currentRoom = null; }
@@ -410,22 +413,33 @@ function startTutorial() {
   setTimeout(() => ui.fade(false), 380);
   view = 'game';
   ui.showScreen('game');
+  const advanced = mode === 'advanced';
   try {
     tutorial.start({
+      mode,
       onFinish: () => {
-        saveJSON(LS_TUTORIAL, { done: true, at: Date.now() });
-        ui.setTutorialButtonDone?.(true);
-        reportClient('tutorial-done');
+        const key = advanced ? LS_TRAINING : LS_TUTORIAL;
+        const prev = loadJSON(key, {});
+        saveJSON(key, { done: true, at: Date.now(), times: (prev.times || 0) + 1 });
+        if (!advanced) ui.setTutorialButtonDone?.(true);
+        ui.setTrainingButtonDone?.(true);
+        reportClient(advanced ? 'training-done' : 'tutorial-done');
       },
       onExit: () => {},
     });
-    reportClient('tutorial-start');
+    reportClient(advanced ? 'training-start' : 'tutorial-start');
   } catch (err) {
     reportClient('tutorial-fail', err);
     ui.showError('教程启动失败: ' + (err.message || err));
     console.error(err);
     exitTutorial();
   }
+}
+
+// mark the advanced-training button once it has been cleared
+function refreshTrainingBadge() {
+  ui.setTutorialButtonDone?.(tutorialDone());
+  ui.setTrainingButtonDone?.(!!loadJSON(LS_TRAINING, {}).done);
 }
 
 function exitTutorial() {
