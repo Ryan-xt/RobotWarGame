@@ -14,8 +14,13 @@
 
 **方式 A：下载压缩包（最简单）**
 
-1. 打开仓库页面 → 绿色 **Code** 按钮 → **Download ZIP**；
-2. 解压到一个**没有中文、没有空格**的路径，例如 `D:\RobotWarGame`；
+1. 直接点这个链接下载（不用在 GitHub 上找）：
+   <https://github.com/Ryan-xt/RobotWarGame/archive/refs/heads/arena/6ce10cda-robotwargame.zip>
+   — 如果要在网页上下：先把左上角的**分支下拉框从 `main` 切到
+   `arena/6ce10cda-robotwargame`**，再点绿色 **Code** → **Download ZIP**；
+   （只下 `main` 的话压缩包里只有这份 README，游戏代码不在 `main` 上）
+2. 解压到一个**没有中文、没有空格**的路径，例如 `D:\RobotWarGame`
+   （压缩包解出来的文件夹名会带分支名，无所谓，进去就是游戏）；
 3. Windows 双击 `start.bat`，macOS / Linux 双击（或在终端执行）`start.sh`；
 4. 第一次会自动装依赖，然后浏览器自己打开 `http://localhost:3000`；
 5. 关掉那个命令行窗口 = 关掉服务器。下次玩还是双击同一个文件。
