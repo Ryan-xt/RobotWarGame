@@ -49,6 +49,10 @@ ok(moved, 'AI 在场上移动');
 ok(sim.players.get('you').heat >= 0, '玩家热量正常更新');
 const botShots = bots.reduce((a, b) => a + b.stats.shots, 0);
 ok(botShots > 0, 'AI 会朝玩家开火', `shots=${botShots}`);
+// 两台 AI 以前会互相开打、把玩家晾在一边（玩家看到的就是「AI 会闪避但不会射击」）
+ok(bots.some((b) => b.botState && b.botState.targetId === 'you'), 'AI 锁定的是玩家，不是队友',
+  bots.map((b) => b.botState?.targetId).join(','));
+ok(sim.duelFocus === true, '训练场开启「只盯玩家」模式');
 
 console.log('\n[冲刺躲弹] 判定只在真的躲子弹时才算');
 const me = sim.players.get('you');

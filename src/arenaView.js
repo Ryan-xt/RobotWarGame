@@ -40,6 +40,10 @@ export class ArenaView {
     this.acids = [];
     this.towers = [];
     this.exhaust = [];
+    // Every "lamp" in the arena is registered as a cheap anchor; a fixed-size
+    // pool of real PointLights follows the nearest anchors. See updateLightPool.
+    this.lightAnchors = [];
+    this.lightPool = [];
     this.buildEnvironment();
     this.buildFloor();
     this.buildCenter();
@@ -56,6 +60,70 @@ export class ArenaView {
     this.decor = this.group.children.filter((c) => !baseline.has(c));
     this.buildBoundary();
     this.buildDust();
+    this.buildLightPool();
+  }
+
+  // ------------------------------------------------------------- lights
+  //
+  // A PointLight per vent/tower/lamp/floodlight/mounted mech is how this scene
+  // used to be lit: 30+ point lights in a 4-player match on the big map. Every
+  // extra light is another loop in *every* fragment of *every* standard
+  // material, and — worse — whenever one is added or hidden (a mech dies, a
+  // prop is culled) three.js recompiles every shader in the scene, which is the
+  // 200 ms freeze players saw after a respawn. So the count is now constant:
+  // one small pool of lights that follows the nearest lamps, and everything
+  // else keeps its additive glow sprite.
+  addLightAnchor(x, y, z, color, intensity, distance) {
+    const a = { x, y, z, color, intensity, distance };
+    this.lightAnchors.push(a);
+    return a;
+  }
+
+  buildLightPool(size = 6) {
+    while (this.lightPool.length > size) {
+      const l = this.lightPool.pop();
+      this.group.remove(l);
+    }
+    while (this.lightPool.length < size) {
+      const l = new THREE.PointLight('#ffffff', 0, 12, 2);
+      l.userData.anchor = null;
+      this.group.add(l);
+      this.lightPool.push(l);
+    }
+    this._poolAt = null; // force a reassignment on the next frame
+  }
+
+  updateLightPool(focus, time) {
+    if (!this.lightPool.length) this.buildLightPool();
+    const fx = focus ? focus.x : 0;
+    const fz = focus ? focus.z : 0;
+    const moved = !this._poolAt || Math.hypot(fx - this._poolAt.x, fz - this._poolAt.z) > 1.5;
+    if (moved) {
+      this._poolAt = { x: fx, z: fz };
+      const sorted = this._poolSort || (this._poolSort = []);
+      sorted.length = 0;
+      for (const a of this.lightAnchors) {
+        const dx = a.x - fx, dz = a.z - fz;
+        sorted.push({ a, d: dx * dx + dz * dz });
+      }
+      sorted.sort((p, q) => p.d - q.d);
+      for (let i = 0; i < this.lightPool.length; i++) {
+        const l = this.lightPool[i];
+        const a = sorted[i] ? sorted[i].a : null;
+        l.userData.anchor = a;
+        if (a) {
+          l.position.set(a.x, a.y, a.z);
+          l.color.set(a.color);
+          l.distance = a.distance;
+        }
+      }
+    }
+    // live intensity (a charging tower pulses, vents breathe)
+    for (const l of this.lightPool) {
+      const a = l.userData.anchor;
+      if (!a) { l.intensity = 0; continue; }
+      l.intensity = a.intensity * (a.pulse ? 1 + Math.sin(time * 2 + a.x) * 0.12 : 1);
+    }
   }
 
   buildEnvironment() {
@@ -334,9 +402,7 @@ export class ArenaView {
       const icon = makeIconSprite('coolant', '#c9f6ff', 1.3);
       icon.position.y = 0.9;
       g.add(icon);
-      const light = new THREE.PointLight('#8ce9ff', 0.6, c.r * 3.2, 2);
-      light.position.y = 1.2;
-      g.add(light);
+      this.addLightAnchor(c.x, 1.2, c.z, '#8ce9ff', 0.7, c.r * 3.2).pulse = true;
       this.group.add(g);
       this.coolers.push({ g, mist, glow, edge, icon, c });
     }
@@ -428,14 +494,12 @@ export class ArenaView {
       zapRing.rotation.x = -Math.PI / 2;
       zapRing.position.y = 0.055;
       g.add(zapRing);
-      const light = new THREE.PointLight('#6fe3ff', 1.0, 8, 2);
-      light.position.y = 4.1;
-      g.add(light);
+      const anchor = this.addLightAnchor(t.x, 4.1, t.z, '#6fe3ff', 1.0, 8);
       const icon = makeIconSprite('bolt', '#a9efff', 1.1);
       icon.position.y = 5.3;
       g.add(icon);
       this.group.add(g);
-      this.towers.push({ g, orb, orbGlow, zapRing, light, icon, t, coil });
+      this.towers.push({ g, orb, orbGlow, zapRing, anchor, icon, t, coil });
     }
   }
 
@@ -545,9 +609,7 @@ export class ArenaView {
       cone.position.set(0, 3.2, 0);
       cone.rotation.z = Math.PI;
       g.add(cone);
-      const light = new THREE.PointLight('#ffbd80', 0.7, 18, 2);
-      light.position.set(0, 7, 0);
-      g.add(light);
+      this.addLightAnchor(g.position.x, 7, g.position.z, '#ffbd80', 0.8, 20);
       this.group.add(g);
     }
 
@@ -677,8 +739,9 @@ export class ArenaView {
     this.group.add(this.dust);
   }
 
-  update(dt, time, snapshot) {
+  update(dt, time, snapshot, focus = null) {
     this.time = time;
+    this.updateLightPool(focus, time);
     // ambient animation
     for (const c of this.coolers) {
       const arr = c.mist.geometry.attributes.position.array;
@@ -748,7 +811,7 @@ export class ArenaView {
       tv.orb.scale.setScalar(1 + ch * 0.7);
       tv.orbGlow.material.opacity = 0.3 + ch * 0.6;
       tv.orbGlow.scale.setScalar(2.8 + ch * 2);
-      tv.light.intensity = 0.6 + ch * 2.5;
+      tv.anchor.intensity = 0.8 + ch * 2.6;
       tv.zapRing.material.opacity = ch * 0.5;
       tv.icon.material.opacity = 0.5 + ch * 0.5;
       tv.coil.rotation.y += 0.02 + ch * 0.24;

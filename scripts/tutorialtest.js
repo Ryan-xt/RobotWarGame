@@ -10,6 +10,7 @@ const errors = trackConsoleErrors();
 const { UI } = await import('../src/ui.js');
 const { Game } = await import('../src/game.js');
 const { Tutorial, TUTORIAL_STEPS } = await import('../src/tutorial.js');
+const THREE = await import('three');
 
 let failures = 0;
 const ok = (cond, label, extra = '') => {
@@ -50,9 +51,18 @@ function frame(n = 1, fn) {
     game.update(DT);
   }
 }
+// Aim through the real input path: the crosshair angle is derived from the
+// mouse position and the camera every frame, so the test puts the cursor on
+// the target's screen position instead of poking localAim directly.
+const _v = new THREE.Vector3();
 function face(x, z) {
-  const p = me();
-  game.localAim = Math.atan2(z - p.z, x - p.x);
+  const cam = game.camera;
+  if (!cam) return;
+  cam.updateMatrixWorld();
+  cam.matrixWorldInverse.copy(cam.matrixWorld).invert();
+  _v.set(x, 0, z).project(cam);
+  game.mouse.x = (_v.x * 0.5 + 0.5) * window.innerWidth;
+  game.mouse.y = (-_v.y * 0.5 + 0.5) * window.innerHeight;
 }
 
 // let the countdown run out
@@ -115,7 +125,12 @@ ok(stepNow() === 4, 'advanced to step 5', TUTORIAL_STEPS[stepNow()].id);
 
 // ---- 5. overheat then cool down -------------------------------------------
 // the training dummy shoots the player: standing still takes hits, which is the
-// real "no HP, only heat" rule
+// real "no HP, only heat" rule. Stand back on the practice line first — the
+// range has cooling vents, and standing in one while being shot at would keep
+// the heat at zero (which is exactly what the vents are for).
+me().x = tutorial.layout.home.x;
+me().z = tutorial.layout.home.z;
+me().heat = 0;
 frame(60 * 10);
 ok(tutorial.watch.heatPeaked, 'the dummy heating the player counts as 过载', `${tutorial.watch.maxHeat}`);
 ok(me().heat >= 60, 'the dummy actually lands its shots', me().heat.toFixed(0));

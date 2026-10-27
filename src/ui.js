@@ -41,6 +41,8 @@ export function mechSVG(shape, cls = '') {
   return `<svg class="${cls}" viewBox="0 0 64 64" aria-hidden="true">${parts[shape] || parts.assault}</svg>`;
 }
 
+const TUTORIAL_TITLES = { basic: '新手教程', advanced: '进阶训练', shooting: '射击训练' };
+
 export class UI {
   constructor({ audio, handlers } = {}) {
     this.audio = audio;
@@ -161,6 +163,7 @@ export class UI {
     tap('btn-hud-help', () => this.openModal('modal-help'));
     tap('btn-tutorial', () => h.onTutorial?.());
     tap('btn-training', () => h.onTraining?.());
+    tap('btn-shooting', () => this.handlers.onShooting?.());
     tap('btn-fieldguide', () => this.openModal('modal-field'));
     tap('btn-fieldguide-2', () => this.openModal('modal-field'));
     tap('btn-tut-skip', () => h.onTutorialSkip?.());
@@ -563,7 +566,8 @@ export class UI {
       this._timeClass = timeClass;
       $('hud-time').className = timeClass;
     }
-    const phase = this.tutorialMode ? (this.tutorialKind === 'advanced' ? '进阶训练' : '训练场')
+    const phase = this.tutorialMode
+      ? (this.tutorialKind === 'advanced' ? '进阶训练' : this.tutorialKind === 'shooting' ? '射击训练' : '训练场')
       : snap.phase === 'countdown' ? '核心同步' : snap.storm ? '电磁风暴' : timeLeft <= 30 ? '最后 30 秒' : '混战进行中';
     if (phase !== this._phaseText) {
       this._phaseText = phase;
@@ -877,9 +881,18 @@ export class UI {
   /** Menu badge for 进阶训练 (cleared once). */
   setTrainingButtonDone(done) {
     const btn = $('btn-training');
+    if (btn) {
+      const small = btn.querySelector('small');
+      if (small) small.textContent = done ? '已通关 · 可以再来练手感' : '和 2 台会还手的 AI 练走位 · 练完就能打赢';
+      btn.classList.toggle('done', !!done);
+    }
+  }
+
+  setShootingButtonDone(done) {
+    const btn = $('btn-shooting');
     if (!btn) return;
     const small = btn.querySelector('small');
-    if (small) small.textContent = done ? '已通关 · 可以再来练手感' : '和 2 台会还手的 AI 练走位 · 练完就能打赢';
+    if (small) small.textContent = done ? '已通关 · 可以回来练手感' : '固定靶 / 移动靶 / 远靶 / 点射 / 实战靶机';
     btn.classList.toggle('done', !!done);
   }
 
@@ -887,19 +900,19 @@ export class UI {
     this.tutorialMode = !!on;
     this.tutorialKind = mode;
     const title = document.querySelector('#tut-panel .tut-title');
-    if (title) title.textContent = mode === 'advanced' ? '进阶训练' : '新手教程';
+    if (title) title.textContent = TUTORIAL_TITLES[mode] || '新手教程';
     this._timeText = null;
     this._phaseText = null;
     this._timeClass = null;
   }
 
   /** Render the step list and highlight step `index`. */
-  showTutorial(steps, index = 0, title = '新手教程') {
+  showTutorial(steps, index = 0, title = '新手教程', mode = null) {
     const panel = $('tut-panel');
     if (!panel) return;
-    const advanced = title.includes('进阶');
-    this.setTutorialMode(true, advanced ? 'advanced' : 'basic');
-    $('hud-room').textContent = advanced ? 'ROOM TRAINING' : 'ROOM TUTORIAL';
+    const kind = mode || (title.includes('射击') ? 'shooting' : title.includes('进阶') ? 'advanced' : 'basic');
+    this.setTutorialMode(true, kind);
+    $('hud-room').textContent = kind === 'advanced' ? 'ROOM TRAINING' : kind === 'shooting' ? 'ROOM RANGE' : 'ROOM TUTORIAL';
     $('hud-mode').textContent = title;
     // the 10-second hint box would sit on top of the tutorial panel
     $('tutorial')?.classList.add('hidden');
@@ -943,6 +956,19 @@ export class UI {
     panel.classList.remove('hidden');
     // make sure the scoreboard/hints do not cover it
     this.hideScoreboard?.();
+  }
+
+  /** One-line live readout under the current step (射击篇: 命中率 / 热量). */
+  setTutorialStat(text) {
+    const cur = $('tut-current');
+    if (!cur) return;
+    let el = cur.querySelector('.tut-stat');
+    if (!el) {
+      el = document.createElement('p');
+      el.className = 'tut-stat';
+      cur.appendChild(el);
+    }
+    if (el.textContent !== text) el.textContent = text;
   }
 
   completeTutorial() {

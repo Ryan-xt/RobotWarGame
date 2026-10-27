@@ -301,12 +301,16 @@ export class Game {
 
   updateAim() {
     if (!this.camera) return;
-    // The camera moves slowly and the mouse only changes on events, so the
-    // projected aim point is refreshed at most 30 times per second.
-    const now = this.time;
-    if (this._aimAt && now - this._aimAt < 1 / 30 && this._aimMouse === this.mouse.x + ':' + this.mouse.y) return;
-    this._aimAt = now;
-    this._aimMouse = this.mouse.x + ':' + this.mouse.y;
+    // The aim point is where the cursor ray hits the floor *under the current
+    // camera*. Recomputing it only when the mouse moved was the bug behind
+    // "the mech does not follow my mouse": walking moves the camera, so the
+    // same screen position maps to a different world point every frame. The
+    // cache key therefore has to include the camera, or the facing freezes at
+    // whatever the world looked like on the last mouse event.
+    const cam = this.camera.position;
+    const key = `${Math.round(this.mouse.x)}:${Math.round(this.mouse.y)}:${cam.x.toFixed(2)}:${cam.z.toFixed(2)}:${cam.y.toFixed(2)}`;
+    if (this._aimKey === key) return;
+    this._aimKey = key;
     _ndc.set(
       (this.mouse.x / window.innerWidth) * 2 - 1,
       -(this.mouse.y / window.innerHeight) * 2 + 1,
@@ -1416,7 +1420,7 @@ export class Game {
       const ambEvery = this.quality === 'low' ? 2 : 1;
       this.ambFrame = (this.ambFrame || 0) + 1;
       if (this.ambFrame % ambEvery === 0) {
-        this.arenaView.update(dt * ambEvery, this.time, this.snap);
+        this.arenaView.update(dt * ambEvery, this.time, this.snap, this.selfVisual);
       }
     }
     // crosshair follows mouse & local charge (30 Hz, only when it changed)

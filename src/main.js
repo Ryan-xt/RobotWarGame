@@ -12,6 +12,7 @@ const LS_PROFILE = 'overload.profile.v1';
 const LS_SETTINGS = 'overload.settings.v1';
 const LS_TUTORIAL = 'overload.tutorial.v1';
 const LS_TRAINING = 'overload.training.v1';
+const LS_SHOOTING = 'overload.shooting.v1';
 const SS_SESSION = 'overload.session.v1';
 
 function loadJSON(key, fallback) {
@@ -104,6 +105,7 @@ const ui = new UI({
     onQuick: guard('onQuick', () => startQuickplay()),
     onTutorial: guard('onTutorial', () => startTutorial('basic')),
     onTraining: guard('onTraining', () => startTutorial('advanced')),
+    onShooting: guard('onShooting', () => startTutorial('shooting')),
     onTutorialSkip: guard('onTutorialSkip', () => tutorial.skipStep()),
     onTutorialExit: guard('onTutorialExit', () => exitTutorial()),
     onTutorialFight: guard('onTutorialFight', () => { exitTutorial(); startQuickplay(); }),
@@ -414,20 +416,22 @@ function startTutorial(mode = 'basic') {
   view = 'game';
   ui.showScreen('game');
   const advanced = mode === 'advanced';
+  const shooting = mode === 'shooting';
   try {
     tutorial.start({
       mode,
       onFinish: () => {
-        const key = advanced ? LS_TRAINING : LS_TUTORIAL;
+        const key = shooting ? LS_SHOOTING : advanced ? LS_TRAINING : LS_TUTORIAL;
         const prev = loadJSON(key, {});
         saveJSON(key, { done: true, at: Date.now(), times: (prev.times || 0) + 1 });
-        if (!advanced) ui.setTutorialButtonDone?.(true);
-        ui.setTrainingButtonDone?.(true);
-        reportClient(advanced ? 'training-done' : 'tutorial-done');
+        if (shooting) ui.setShootingButtonDone?.(true);
+        else if (advanced) ui.setTrainingButtonDone?.(true);
+        else ui.setTutorialButtonDone?.(true);
+        reportClient(shooting ? 'shooting-done' : advanced ? 'training-done' : 'tutorial-done');
       },
       onExit: () => {},
     });
-    reportClient(advanced ? 'training-start' : 'tutorial-start');
+    reportClient(shooting ? 'shooting-start' : advanced ? 'training-start' : 'tutorial-start');
   } catch (err) {
     reportClient('tutorial-fail', err);
     ui.showError('教程启动失败: ' + (err.message || err));
@@ -440,6 +444,7 @@ function startTutorial(mode = 'basic') {
 function refreshTrainingBadge() {
   ui.setTutorialButtonDone?.(tutorialDone());
   ui.setTrainingButtonDone?.(!!loadJSON(LS_TRAINING, {}).done);
+  ui.setShootingButtonDone?.(!!loadJSON(LS_SHOOTING, {}).done);
 }
 
 function exitTutorial() {

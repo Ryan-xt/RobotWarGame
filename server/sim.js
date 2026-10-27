@@ -459,12 +459,20 @@ export class MatchSim {
     resolvePlayerArena(this.arena, p, PLAYER_RADIUS);
     this.afterMove(p);
 
-    // facing
-    if (Math.hypot(p.vx, p.vz) > 0.5 && Math.hypot(p.input.mx, p.input.mz) > 0.1) {
+    // facing: the mech turns to where it *aims*, not to where it walks.
+    //
+    // Facing used to snap to the velocity direction while moving, so strafing
+    // made the mech look sideways even with the crosshair on an enemy ("the
+    // mech does not follow my mouse"). Now the body always swings towards the
+    // aim direction; only bots without a target fall back to their walk
+    // direction.
+    const engagedBot = p.bot && p.botState && p.botState.targetId;
+    const moving = Math.hypot(p.vx, p.vz) > 0.5 && Math.hypot(p.input.mx, p.input.mz) > 0.1;
+    if (moving && p.bot && !engagedBot) {
       p.facing = Math.atan2(p.vz, p.vx);
     } else {
       const targetFacing = p.aim;
-      p.facing = normAngle(p.facing + angleDiff(targetFacing, p.facing) * Math.min(1, dt * 12));
+      p.facing = normAngle(p.facing + angleDiff(targetFacing, p.facing) * Math.min(1, dt * 16));
     }
 
     // channel (coolant)

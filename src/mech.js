@@ -112,9 +112,17 @@ export function createMech(mechId, playerColor, playerName = '', opts = {}) {
   // back reactor
   add(torso, GEO.box, darkMat, [-bodyD * 0.55, 0.38, 0], [0.18, 0.34, bodyD * 0.62]);
   add(torso, GEO.cyl8, accentMat, [-bodyD * 0.62, 0.46, 0], [0.1, 0.28, 0.1], [0, 0, Math.PI / 2]);
-  const backLight = new THREE.PointLight(color, 0.5, 2.4, 2);
-  backLight.position.set(-bodyD * 0.6, 0.5, 0);
-  torso.add(backLight);
+  // Reactor glow: a sprite, not a PointLight. A light per mech meant the scene
+  // light count changed whenever somebody died or respawned — three.js then
+  // recompiles every material in the scene, which is the freeze players felt
+  // right after a respawn — and 8 of them made the big map very expensive.
+  const reactor = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: glowTexture(), color, transparent: true, opacity: 0.55,
+    blending: THREE.AdditiveBlending, depthWrite: false,
+  }));
+  reactor.scale.set(1.5, 1.5, 1);
+  reactor.position.set(-bodyD * 0.72, 0.5, 0);
+  torso.add(reactor);
 
   // shoulder pads
   const padZ = bodyD / 2 + 0.1;
@@ -300,7 +308,7 @@ export function createMech(mechId, playerColor, playerName = '', opts = {}) {
     group, pelvis, torso, head, legs, gun, muzzle, weapon, leftArm, core, visor,
     ring: ringMesh, ringMat, glow, flash, shield, shieldMat, nameSprite,
     chevron, frontArc, aimLine, frontLamp, facingMat, selfRing,
-    hullMat, trimMat, darkMat, accentMat, playerMat, coreMat, visorMat, backLight,
+    hullMat, trimMat, darkMat, accentMat, playerMat, coreMat, visorMat, reactor,
     shape: mech.shape, mech, color,
     walkPhase: Math.random() * 10, recoil: 0, flashT: 0, heat: 0, dead: false,
     baseY: 0, bob: 0,
@@ -343,8 +351,9 @@ export function updateMech(parts, look, dt) {
   p.coreMat.emissiveIntensity = 1.0 + hk * 2.6 + Math.sin(t * 9) * 0.2 * hk;
   p.core.scale.setScalar(0.14 + hk * 0.04 + Math.sin(t * (5 + hk * 15)) * 0.008 * hk);
   p.visorMat.color.copy(p.color).lerp(new THREE.Color('#ff5030'), hk * 0.8).multiplyScalar(1.4);
-  p.backLight.color.copy(p.color).lerp(new THREE.Color('#ff4020'), hk * 0.7);
-  p.backLight.intensity = 0.4 + hk * 1.6;
+  p.reactor.material.color.copy(p.color).lerp(new THREE.Color('#ff4020'), hk * 0.7);
+  p.reactor.material.opacity = 0.4 + hk * 0.5 + Math.sin(t * 6) * 0.06;
+  p.reactor.scale.setScalar(1.35 + hk * 0.7);
   p.ringMat.opacity = 0.5 + hk * 0.5;
   p.ringMat.color.copy(p.color).lerp(new THREE.Color('#ff4020'), hk * 0.7);
   // facing cues: pulse the chevron a little so a still mech still reads

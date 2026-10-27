@@ -808,3 +808,26 @@ body[data-quality="low"] .countdown { background: rgba(0,0,0,.35); }
 #btn-training { border-color: rgba(70, 217, 255, .28); }
 #btn-training small { color: rgba(120, 220, 255, .8); }
 #btn-training.done small { color: rgba(157, 255, 87, .75); }
+
+/* 射击训练：进度面板里的实时命中率/热量 */
+.tut-stat {
+  margin: 6px 0 0;
+  font: 600 12px/1.5 var(--mono, monospace);
+  letter-spacing: .04em;
+  color: #ffd27a;
+}
+#btn-shooting.done,
+#btn-training.done {
+  opacity: .72;
+}
+/* 三个训练入口挤在菜单里：略矮一点，别把「创建/加入房间」挤出首屏 */
+#btn-tutorial,
+#btn-shooting,
+#btn-training {
+  padding: 9px 16px;
+}
+#btn-tutorial .btn-text small,
+#btn-shooting .btn-text small,
+#btn-training .btn-text small {
+  font-size: 10px;
+}

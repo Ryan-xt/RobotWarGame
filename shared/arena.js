@@ -255,43 +255,92 @@ function resolveCircleAabb(p, r, w) {
   return true;
 }
 
-// Resolve a circle (player/mine) against static arena geometry.
-export function resolvePlayerArena(arena, p, r) {
-  let hit = false;
+// How deep a circle sits inside the nearest solid collider (0 = free).
+function penetrationDepth(arena, p, r) {
+  let worst = 0;
   for (const w of arena.walls) {
     if (!w.alive) continue;
-    if (resolveCircleAabb(p, r, w)) hit = true;
+    const hx = w.w / 2, hz = w.h / 2;
+    const dx = Math.max(Math.abs(p.x - w.x) - hx, 0);
+    const dz = Math.max(Math.abs(p.z - w.z) - hz, 0);
+    const d = Math.hypot(dx, dz);
+    if (d < r) worst = Math.max(worst, r - d);
   }
   for (const t of arena.towers) {
-    const dx = p.x - t.x, dz = p.z - t.z;
-    const d = Math.hypot(dx, dz), min = t.r + r;
-    if (d < min && d > 1e-5) {
-      p.x = t.x + (dx / d) * min;
-      p.z = t.z + (dz / d) * min;
-      hit = true;
-    }
+    const d = Math.hypot(p.x - t.x, p.z - t.z);
+    if (d < t.r + r) worst = Math.max(worst, t.r + r - d);
   }
   for (const pl of arena.plates) {
-    const dx = p.x - pl.x, dz = p.z - pl.z;
-    const d = Math.hypot(dx, dz), min = pl.r + r;
-    if (d < min && d > 1e-5) {
-      p.x = pl.x + (dx / d) * min;
-      p.z = pl.z + (dz / d) * min;
-      hit = true;
-    }
+    const d = Math.hypot(p.x - pl.x, p.z - pl.z);
+    if (d < pl.r + r) worst = Math.max(worst, pl.r + r - d);
   }
   for (const sh of arena.dynamicPlates || []) {
     if (sh.hp <= 0) continue;
-    const dx = p.x - sh.x, dz = p.z - sh.z;
-    const d = Math.hypot(dx, dz), min = sh.r + r;
-    if (d < min && d > 1e-5) {
-      p.x = sh.x + (dx / d) * min;
-      p.z = sh.z + (dz / d) * min;
-      hit = true;
-    }
+    const d = Math.hypot(p.x - sh.x, p.z - sh.z);
+    if (d < sh.r + r) worst = Math.max(worst, sh.r + r - d);
   }
-  p.x = Math.max(-arena.half + r, Math.min(arena.half - r, p.x));
-  p.z = Math.max(-arena.half + r, Math.min(arena.half - r, p.z));
+  if (Math.abs(p.x) > arena.half - r) worst = Math.max(worst, Math.abs(p.x) - (arena.half - r));
+  if (Math.abs(p.z) > arena.half - r) worst = Math.max(worst, Math.abs(p.z) - (arena.half - r));
+  return worst;
+}
+
+// Resolve a circle (player/mine) against static arena geometry.
+//
+// A single pass is not enough on the dense maps: pushing out of the wall you
+// walked into can leave you *inside* the rebound plate bolted to the wall, or
+// inside the next wall of a cluster, and if that collider was already visited
+// this frame nothing pushes you out again — the mech visibly stands in (and
+// sometimes slides out through) a wall. So: resolve every collider type a few
+// times, and if the spot is genuinely too narrow for the mech, refuse the move
+// instead of wedging the player into the geometry.
+export function resolvePlayerArena(arena, p, r) {
+  const x0 = p.x, z0 = p.z;
+  let hit = false;
+  for (let pass = 0; pass < 3; pass++) {
+    let moved = false;
+    for (const w of arena.walls) {
+      if (!w.alive) continue;
+      if (resolveCircleAabb(p, r, w)) { moved = true; hit = true; }
+    }
+    for (const t of arena.towers) {
+      const dx = p.x - t.x, dz = p.z - t.z;
+      const d = Math.hypot(dx, dz), min = t.r + r;
+      if (d < min && d > 1e-5) {
+        p.x = t.x + (dx / d) * min;
+        p.z = t.z + (dz / d) * min;
+        moved = true; hit = true;
+      }
+    }
+    for (const pl of arena.plates) {
+      const dx = p.x - pl.x, dz = p.z - pl.z;
+      const d = Math.hypot(dx, dz), min = pl.r + r;
+      if (d < min && d > 1e-5) {
+        p.x = pl.x + (dx / d) * min;
+        p.z = pl.z + (dz / d) * min;
+        moved = true; hit = true;
+      }
+    }
+    for (const sh of arena.dynamicPlates || []) {
+      if (sh.hp <= 0) continue;
+      const dx = p.x - sh.x, dz = p.z - sh.z;
+      const d = Math.hypot(dx, dz), min = sh.r + r;
+      if (d < min && d > 1e-5) {
+        p.x = sh.x + (dx / d) * min;
+        p.z = sh.z + (dz / d) * min;
+        moved = true; hit = true;
+      }
+    }
+    p.x = Math.max(-arena.half + r, Math.min(arena.half - r, p.x));
+    p.z = Math.max(-arena.half + r, Math.min(arena.half - r, p.z));
+    if (!moved) break;
+  }
+  // Squeezed into a gap narrower than the mech (a plate bolted to a wall, two
+  // walls closer than 2r)? Then stay where we came from if that was free.
+  if (penetrationDepth(arena, p, r) > 0.02 && penetrationDepth(arena, { x: x0, z: z0 }, r) < 0.02) {
+    p.x = x0;
+    p.z = z0;
+    return true;
+  }
   return hit;
 }
 

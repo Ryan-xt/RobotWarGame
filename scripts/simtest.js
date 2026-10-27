@@ -1,7 +1,7 @@
 // Headless balance/invariant test: runs complete bot matches across all arena
 // sizes and every mech skill, then checks the authoritative sim's guarantees.
 import { buildArena, resolvePlayerArena, arenaSummary, pointBlocked } from '../shared/arena.js';
-import { MECH_IDS } from '../shared/constants.js';
+import { MECH_IDS, PLAYER_RADIUS } from '../shared/constants.js';
 import { MatchSim } from '../server/sim.js';
 
 let failures = 0;
@@ -151,6 +151,66 @@ const late = runMatch({ size: 20, seed: 5, mode: 'ffa', duration: 65, eventRate:
 ok(late.sim.phase === 'over', 'short match completes');
 const stormSnaps = late.seen.phases.has('live');
 ok(stormSnaps, 'match passes through the live phase');
+
+// ---------------------------------------------------------------- collision
+// 48 m 地图墙最密：两块碰撞体夹缝比机甲还窄时，解析器以前会把机甲塞进墙里
+// 半米（玩家看到的「穿墙 / 站在墙里」）。
+console.log('\n[walls] dense map never wedges the mech');
+for (const size of [20, 30, 40, 48]) {
+  const arena = buildArena(size, 20251026);
+  const walkers = [{ id: 'w1', name: 'W', color: '#fff', colorId: 'orange', mech: 'assault', team: 0 }];
+  const sim = new MatchSim({ arena, players: walkers, settings: { mode: 'ffa', duration: 900, eventRate: 'low', heatRate: 'slow', difficulty: 'easy' }, seed: 1 });
+  sim.phase = 'live';
+  const p = sim.players.get('w1');
+  const depth = () => {
+    let worst = 0;
+    for (const w of arena.walls) {
+      if (!w.alive) continue;
+      const dx = Math.max(Math.abs(p.x - w.x) - w.w / 2, 0);
+      const dz = Math.max(Math.abs(p.z - w.z) - w.h / 2, 0);
+      const d = Math.hypot(dx, dz);
+      if (d < PLAYER_RADIUS) worst = Math.max(worst, PLAYER_RADIUS - d);
+    }
+    return worst;
+  };
+  let worst = 0;
+  for (let k = 0; k < 24; k++) {
+    const a = (k / 24) * Math.PI * 2;
+    p.x = 0; p.z = 0; p.alive = true; p.heat = 0; p.iframeUntil = 1e9;
+    for (let i = 0; i < 60 * 4; i++) {
+      p.input = { mx: Math.cos(a), mz: Math.sin(a), aim: a, fire: false, seq: 1 };
+      if (i % 30 === 0) p.pendingDash = true;
+      p.dashCdUntil = 0;
+      sim.step(1 / 60);
+      worst = Math.max(worst, depth());
+      if (!p.alive) { p.alive = true; p.x = 0; p.z = 0; }
+    }
+  }
+  ok(worst < 0.05, `${size} m map: mech never sinks into a wall`, `max ${worst.toFixed(3)} m`);
+}
+
+// ---------------------------------------------------------------- facing
+// 机甲的身体永远转向准星，而不是移动方向（否则一边走一边打，看起来像没跟鼠标）。
+console.log('\n[facing] body follows the aim, not the walk direction');
+{
+  const arena = buildArena(20, 777);
+  const people = [
+    { id: 'a', name: 'A', color: '#5ad8ff', colorId: 'cyan', mech: 'assault', team: 0 },
+    { id: 'b', name: 'B', color: '#ff5b4a', colorId: 'red', mech: 'assault', team: 1 },
+  ];
+  const sim = new MatchSim({ arena, players: people, settings: { mode: 'ffa', duration: 900, eventRate: 'low', heatRate: 'slow', difficulty: 'easy' }, seed: 1 });
+  sim.phase = 'live';
+  const a = sim.players.get('a');
+  a.x = 0; a.z = 0; a.facing = Math.PI; a.aim = 0;
+  for (let i = 0; i < 40; i++) {
+    // walking straight down (+z) while aiming at +x
+    sim.applyInput('a', { mx: 0, mz: 1, aim: 0, fire: false, seq: i });
+    sim.step(1 / 60);
+  }
+  const facingErr = Math.abs(Math.atan2(Math.sin(a.facing - 0), Math.cos(a.facing - 0)));
+  ok(facingErr < 0.2, 'strafing: the mech still faces the crosshair', `${(facingErr * 57.3).toFixed(0)}°`);
+  ok(Math.abs(a.z) > 0.5, 'and it really was moving', `z=${a.z.toFixed(2)}`);
+}
 
 console.log(failures === 0 ? '\nSIM TEST OK' : `\nSIM TEST FAILED (${failures})`);
 process.exit(failures === 0 ? 0 : 1);

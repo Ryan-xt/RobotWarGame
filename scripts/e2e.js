@@ -173,6 +173,19 @@ document.getElementById('btn-tut-exit').onclick({ target: document.getElementByI
 await waitUntil(() => !app.ui.screenMenu.classList.contains('hidden'), 4000, 'menu after training');
 ok(!app.tutorial.active, '退出进阶训练回到菜单');
 
+// ---------------------------------------------------------------- 射击训练
+app.ui.handlers.onShooting();
+await waitUntil(() => app.tutorial.active && app.tutorial.mode === 'shooting', 4000, 'shooting start');
+ok(app.tutorial.mode === 'shooting', '射击训练按钮启动射击篇');
+ok(app.tutorial.steps.length === 5, '射击篇五步', String(app.tutorial.steps.length));
+ok(document.getElementById('hud-mode').textContent === '射击训练', 'HUD 显示「射击训练」',
+  document.getElementById('hud-mode').textContent);
+ok(app.game.players.size === 5, '玩家 + 3 个靶 + 1 台实战靶机', String(app.game.players.size));
+ok(!!app.tutorial.sim.players.get('tgt2') && app.tutorial.sim.players.get('tgt2').dummy, '移动靶是木头靶');
+document.getElementById('btn-tut-exit').onclick({ target: document.getElementById('btn-tut-exit') });
+await waitUntil(() => !app.ui.screenMenu.classList.contains('hidden'), 4000, 'menu after shooting');
+ok(!app.tutorial.active, '退出射击训练回到菜单');
+
 // ---------------------------------------------------------------- 战场图鉴
 document.getElementById('btn-fieldguide').onclick({ target: document.getElementById('btn-fieldguide') });
 ok(!document.getElementById('modal-field').classList.contains('hidden'), '战场图鉴弹窗打开');

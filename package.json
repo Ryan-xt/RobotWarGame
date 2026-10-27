@@ -21,7 +21,8 @@
     "balance": "node scripts/balancetest.js",
     "feel": "node scripts/feeltest.js",
     "hit": "node scripts/hittest.js",
-    "training": "node scripts/trainingtest.js"
+    "training": "node scripts/trainingtest.js",
+    "shooting": "node scripts/shootingtest.js"
   },
   "dependencies": {
     "three": "0.186.1",

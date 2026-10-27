@@ -70,9 +70,17 @@ function moveToward(sim, p, goal) {
 }
 
 function pickTarget(sim, p, st) {
+  // In a training sim the bots exist to spar with the player: they must not
+  // spend the round shooting each other while the trainee stands untouched
+  // (that read as "the AI dodges but never shoots").
+  const humanAlive = sim.duelFocus
+    ? [...sim.players.values()].some((q) => q.alive && !q.bot && !q.dummy)
+    : false;
   let best = null, bd = Infinity;
   for (const q of sim.players.values()) {
     if (!q.alive || q.id === p.id) continue;
+    if (q.dummy) continue; // training props are not valid targets
+    if (sim.duelFocus && humanAlive && q.bot) continue;
     if (sim.settings.mode !== 'ffa' && q.team === p.team) continue;
     let d = dist(p.x, p.z, q.x, q.z);
     if (!hasLineOfSight(sim.arena, p.x, p.z, q.x, q.z)) d += 5;
@@ -261,6 +269,9 @@ export function updateBot(sim, p, dt) {
   }
   input.fire = wantFire;
   if (p.stunUntil > t) { input.mx = 0; input.mz = 0; }
+  // trigger discipline: a bot that keeps firing at 80+ heat just short-circuits
+  // itself, which made the training bots kill themselves instead of sparring
+  if (p.heat >= 80) input.fire = false;
   if (p.heat >= 100) input.fire = false;
 
   // Face movement direction when not engaging.

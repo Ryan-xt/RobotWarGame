@@ -127,6 +127,58 @@ const before = game.recentImpact.length;
 game.processFx([{ e: 'bounce', x: 3, z: 3, n: 1, id: live.id }]);
 ok(true, '反弹/打墙也有撞击特效（不抛异常）');
 
+// ---------------------------------------------------------------- aim
+// 准星角度必须每帧跟着相机/站位重新算：以前只在鼠标移动时算一次，走过一段路
+// 之后同一个屏幕位置指向完全不同的世界坐标，看起来就是「鼠标不跟随面向」。
+console.log('\n[aim] 准星跟随机位/相机');
+{
+  const cam = game.camera;
+  const place = (x) => {
+    cam.position.set(x, 14, 10);
+    cam.lookAt(x, 0.9, 0);
+    cam.updateMatrixWorld();
+    cam.matrixWorldInverse.copy(cam.matrixWorld).invert();
+  };
+  game.mouse.x = 1180; game.mouse.y = 300;
+  place(0);
+  game._aimKey = null;
+  game.updateAim();
+  const aimA = game.localAim;
+  place(6);
+  game.updateAim();
+  const aimB = game.localAim;
+  ok(Math.abs(aimA - aimB) > 0.05, '相机移动后（鼠标不动）准星角度会重算',
+    `${aimA.toFixed(3)} → ${aimB.toFixed(3)}`);
+  game.updateAim();
+  ok(game.localAim === aimB, '同一帧重复调用结果稳定');
+}
+
+// ---------------------------------------------------------------- lights
+// 每台机甲一盏点光源的写法会在死亡/重生时改变灯光数量，three.js 于是重编译
+// 整个场景的着色器（重生后那一下卡顿）。现在灯光是固定预算的池子。
+console.log('\n[perf] 灯光预算恒定');
+{
+  const countLights = () => { let n = 0; game.scene.traverse((o) => { if (o.isLight) n++; }); return n; };
+  const before = countLights();
+  const dead = JSON.parse(JSON.stringify(sim.snapshot()));
+  const p2 = dead.players.find((p) => p.id === 'p2');
+  p2.alive = false;
+  game.onSnapshot(dead, 'p1');
+  game.update(DT);
+  const during = countLights();
+  const back = JSON.parse(JSON.stringify(sim.snapshot()));
+  back.players.find((p) => p.id === 'p2').alive = true;
+  game.onSnapshot(back, 'p1');
+  game.update(DT);
+  const after = countLights();
+  ok(before === during && during === after, '死亡 / 重生不改变灯光数量', `${before} → ${during} → ${after}`);
+  ok(before <= 14, '灯光数量有上限（不再随玩家数量增长）', `${before} 个`);
+  const mechLights = [...game.players.values()].reduce((n, v) => {
+    let c = 0; v.parts.group.traverse((o) => { if (o.isLight) c++; }); return n + c;
+  }, 0);
+  ok(mechLights === 0, '机甲自身不再带点光源（用发光贴图代替）', `${mechLights} 个`);
+}
+
 console.log(errors.length ? 'CONSOLE ERRORS:\n' + errors.join('\n') : 'no console errors');
 const pass = failures === 0 && errors.length === 0;
 console.log(pass ? 'HIT TEST OK' : `HIT TEST FAILED (${failures})`);

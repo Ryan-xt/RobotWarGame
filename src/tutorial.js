@@ -3,9 +3,11 @@
 // 不连服务器 —— 客户端直接跑一份 MatchSim（和服务器同一份代码），每帧把它当成
 // 「零延迟的快照」喂给渲染层，所以物理、过载、短路、道具全都是真实规则。
 //
-// 两种模式：
+// 三种模式：
 //   basic    —— 新手教程：两个站着不动的训练靶，六步认识按键和过载规则。
 //   advanced —— 进阶训练：两台会走会打的简单 AI，五步练走位/反弹/散热/补给/击杀。
+//   shooting —— 射击训练（射击篇）：固定靶 / 移动靶 / 远靶 / 点射控温 / 会还手的靶机，
+//               五步练准星、提前量、距离和热量，练完就能在实战里打到人。
 import { MatchSim } from '../server/sim.js';
 import { buildArena, arenaSummary, pointBlocked, hasLineOfSight } from '../shared/arena.js';
 
@@ -206,6 +208,122 @@ export const ADVANCED_STEPS = [
   },
 ];
 
+const SHOOT_TARGETS = [
+  { id: 'tgt1', name: '固定靶', mech: 'guardian', color: '#ff5b4a', colorId: 'red' },
+  { id: 'tgt2', name: '移动靶', mech: 'miner', color: '#ffd24a', colorId: 'amber' },
+  { id: 'tgt3', name: '远靶', mech: 'sniper', color: '#a06bff', colorId: 'violet' },
+];
+const SHOOT_BOT = { id: 'bot1', name: '实战靶机', mech: 'assault', color: '#ff8a3d', colorId: 'orange' };
+
+/** 射击篇：五步练到「打得中」。 */
+export const SHOOTING_STEPS = [
+  {
+    id: 'fixed',
+    title: '打固定靶',
+    keys: '鼠标左键',
+    text: '先把准星压上去：红色固定靶就在正前方，按住左键把它打到短路爆炸。' +
+      '电磁弹沿准星方向直线飞出，这就是全部规则。',
+    goal: '击毁 1 台固定靶',
+    tip: '准星就是弹道：站定 → 准星压在靶上 → 再开枪。',
+    done: (w) => w.fixedKills >= 1,
+  },
+  {
+    id: 'lead',
+    title: '打移动靶',
+    keys: '预判提前量',
+    text: '黄色靶机会左右横移。子弹要飞一会儿才到，所以准星要放在它前进方向的前面：' +
+      '它往右走，就瞄它右边一点。命中 3 次过关。',
+    goal: '命中移动靶 3 次',
+    tip: '打偏多半是瞄在原地：目标越远、横移越快，提前量越大。',
+    done: (w) => w.moverHits >= 3,
+  },
+  {
+    id: 'range',
+    title: '远距离射击',
+    keys: '提前量 + 距离',
+    text: '紫色远靶在 11 米开外，子弹飞到要小半秒。站远一点打：命中 11 米外的目标 2 次。' +
+      '（走到它面前打不算——这一步练的是距离感。）',
+    goal: '命中 11 米外的目标 2 次',
+    tip: '远靶横移慢，提前量反而好算；一发一发看落点，比乱扫更快。',
+    done: (w) => w.farHits >= 2,
+  },
+  {
+    id: 'control',
+    title: '点射控温',
+    keys: '松开左键就降温',
+    text: '按住左键会一直开火，热量顶到 100 就短路。实战打法是点射：打 2–3 发停一下。' +
+      '热量保持在 60 以下命中 4 次过关；一旦超过 75，连击清零。',
+    goal: '热量 ≤ 60 时命中 4 次',
+    tip: '热量越高移动越慢、越容易被反打；宁可少打一发。',
+    done: (w) => w.coolHits >= 4,
+  },
+  {
+    id: 'duel',
+    title: '打会还手的靶机',
+    keys: '走位 + 射击',
+    text: '橙色靶机醒了：它会绕着你走、会还火、会躲子弹。用前四步学的东西——压准星、算提前量、' +
+      '点射控温、看到红弧按空格——把它打爆，射击篇就毕业了。',
+    goal: '击倒 1 台会还手的靶机',
+    tip: '它绕掩体时打反弹弹；它冲脸时先按空格拉开距离再打。',
+    done: (w) => w.duelKills >= 1,
+  },
+];
+
+/** Where the three targets and the duel bot stand, from the practice layout. */
+function planShooting(arena, layout) {
+  const { home, aim } = layout;
+  const t1 = layout.spots[0] || { x: home.x + Math.cos(aim) * 6, z: home.z + Math.sin(aim) * 6 };
+
+  // far target: as far as the lane allows, ideally 12-15 m
+  let far = null;
+  for (let d = 15.5; d >= 11 && !far; d -= 0.5) {
+    for (const off of [0, 0.16, -0.16, 0.32, -0.32, 0.5, -0.5]) {
+      const a = aim + off;
+      const x = home.x + Math.cos(a) * d;
+      const z = home.z + Math.sin(a) * d;
+      if (Math.abs(x) > arena.half - 2 || Math.abs(z) > arena.half - 2) continue;
+      if (pointBlocked(arena, x, z, 0.85)) continue;
+      if (!hasLineOfSight(arena, home.x, home.z, x, z)) continue;
+      far = { x, z, d };
+      break;
+    }
+  }
+  if (!far) far = { x: home.x + Math.cos(aim) * 11, z: home.z + Math.sin(aim) * 11, d: 11 };
+
+  // moving target: 8 m out, sweeping across the line of fire
+  const base = { x: home.x + Math.cos(aim) * 8, z: home.z + Math.sin(aim) * 8 };
+  const clear = (x, z) => Math.abs(x) < arena.half - 2 && Math.abs(z) < arena.half - 2
+    && !pointBlocked(arena, x, z, 0.6) && hasLineOfSight(arena, home.x, home.z, x, z);
+  let axis = { x: -Math.sin(aim), z: Math.cos(aim) };
+  let half = 1.6;
+  let bestHalf = -1;
+  for (let k = 0; k < 8; k++) {
+    const a = aim + Math.PI / 2 + (k * Math.PI) / 4;
+    const ax = Math.cos(a), az = Math.sin(a);
+    let fwd = 0, back = 0;
+    for (let t = 0.4; t <= 3.4; t += 0.4) { if (!clear(base.x + ax * t, base.z + az * t)) break; fwd = t; }
+    for (let t = 0.4; t <= 3.4; t += 0.4) { if (!clear(base.x - ax * t, base.z - az * t)) break; back = t; }
+    const run = Math.min(fwd, back, 3.2);
+    if (run > bestHalf) { bestHalf = run; axis = { x: ax, z: az }; half = Math.max(0.9, run); }
+  }
+  if (bestHalf < 0.8) { axis = { x: -Math.sin(aim), z: Math.cos(aim) }; half = 1.2; }
+
+  // duel bot: 9 m away, off to the side so it does not stand in front of the targets
+  let bot = { x: home.x + Math.cos(aim + 0.7) * 9, z: home.z + Math.sin(aim + 0.7) * 9 };
+  for (const off of [0.7, -0.7, 1.1, -1.1, 1.6, -1.6, 2.4, -2.4]) {
+    const a = aim + off;
+    const x = home.x + Math.cos(a) * 9;
+    const z = home.z + Math.sin(a) * 9;
+    if (Math.abs(x) > arena.half - 2.5 || Math.abs(z) > arena.half - 2.5) continue;
+    if (pointBlocked(arena, x, z, 0.9)) continue;
+    if (!hasLineOfSight(arena, home.x, home.z, x, z)) continue;
+    bot = { x, z };
+    break;
+  }
+
+  return { t1, mover: { base, axis, half }, far, bot };
+}
+
 export class Tutorial {
   constructor({ game, ui, audio, profile, mode = 'basic' }) {
     this.mode = mode;
@@ -241,15 +359,19 @@ export class Tutorial {
     this.clock = 0;
     this.itemDropped = false;
     const advanced = this.mode === 'advanced';
-    this.steps = advanced ? ADVANCED_STEPS : TUTORIAL_STEPS;
+    const shooting = this.mode === 'shooting';
+    this.steps = shooting ? SHOOTING_STEPS : advanced ? ADVANCED_STEPS : TUTORIAL_STEPS;
     this.watch = {
       moved: 0, kills: 0, dashes: 0, skills: 0, heatPeaked: false, cooled: false,
       dead: 0, itemsUsed: 0, maxHeat: 0, bounceHits: 0, dashDodges: 0,
+      // 射击篇
+      hits: 0, fixedKills: 0, moverHits: 0, farHits: 0, coolHits: 0, duelKills: 0,
     };
     this.bounceBase = 0;
     this.lastDashAt = -9;
     this.dashDodgeArmed = false;
-    this.rangeLabel = advanced ? '进阶训练' : '新手教程';
+    this.rangeLabel = shooting ? '射击训练' : advanced ? '进阶训练' : '新手教程';
+    this.targetHome = new Map();
 
     const arena = buildArena(ARENA_SIZE, ARENA_SEED);
     const mechId = this.profile?.mech || 'assault';
@@ -261,7 +383,7 @@ export class Tutorial {
       mech: mechId,
       team: 0,
     };
-    const foes = advanced ? ADV_BOTS : DUMMIES;
+    const foes = shooting ? [...SHOOT_TARGETS, SHOOT_BOT] : advanced ? ADV_BOTS : DUMMIES;
     const infos = [
       meInfo,
       ...foes.map((d) => ({ ...d, team: 1, bot: true, difficulty: 'easy' })),
@@ -278,11 +400,45 @@ export class Tutorial {
     // the basic tutorial drops its own single item; the advanced one plays with
     // the real supply rhythm so抢补给 is actually practised
     if (!advanced) sim.nextItemAt = Infinity;
+    // Training bots must fight the trainee, not each other: two bots that pick
+    // the closest target ended up duelling in a corner while the player was
+    // never shot at ("AI 会闪避但不会射击").
+    sim.duelFocus = advanced || shooting;
     this.sim = sim;
 
     this.dummyHome.clear();
     this.dummyAlive.clear();
-    if (advanced) {
+    this.targetHome.clear();
+    if (shooting) {
+      const layout = planLayout(arena, sim);
+      this.layout = layout;
+      const plan = planShooting(arena, layout);
+      this.shootPlan = plan;
+      const me = sim.players.get(YOU);
+      me.x = layout.home.x;
+      me.z = layout.home.z;
+      me.aim = layout.aim;
+      me.facing = layout.aim;
+      me.vx = 0; me.vz = 0;
+      const place = (id, spot, extra = {}) => {
+        const p = sim.players.get(id);
+        if (!p) return null;
+        p.dummy = true;
+        p.x = spot.x;
+        p.z = spot.z;
+        p.vx = 0; p.vz = 0; p.heat = 0;
+        p.aim = Math.atan2(me.z - p.z, me.x - p.x);
+        Object.assign(p, extra);
+        this.targetHome.set(id, { x: spot.x, z: spot.z });
+        this.dummyAlive.set(id, true);
+        return p;
+      };
+      place('tgt1', plan.t1);
+      place('tgt2', plan.mover.base);
+      place('tgt3', plan.far);
+      const bot = place(SHOOT_BOT.id, plan.bot);
+      if (bot) { bot.active = false; }
+    } else if (advanced) {
       // real bots: let the arena place them; the player gets the spot with a
       // cooling vent nearby so the "退回去降温" lesson is possible
       const layout = planLayout(arena, sim);
@@ -370,6 +526,7 @@ export class Tutorial {
   }
 
   pushSnapshot() {
+    this.tallyHits(this.sim);
     const snap = this.sim.snapshot();
     this.game.onSnapshot(snap, YOU);
     return snap;
@@ -397,6 +554,7 @@ export class Tutorial {
   /** Dummies stay where they were put, face the player and come back fast. */
   keepDummies(sim) {
     if (this.mode === 'advanced') return;
+    if (this.mode === 'shooting') return this.keepTargets(sim);
     const me = sim.players.get(YOU);
     if (!me) return;
     for (const d of DUMMIES) {
@@ -428,6 +586,74 @@ export class Tutorial {
       }
       this.dummyAlive.set(d.id, alive);
       if (alive) p.aim = Math.atan2(me.z - p.z, me.x - p.x);
+    }
+  }
+
+  /**
+   * 射击篇的靶位：固定靶站着，移动靶沿找好的横向通道来回走，远靶在 11 m 外，
+   * 实战靶机在最后一步之前一直冻着。靶子被打爆后 1.6 s 重生，回到原位。
+   */
+  keepTargets(sim) {
+    const me = sim.players.get(YOU);
+    if (!me || !this.shootPlan) return;
+    const plan = this.shootPlan;
+    const w = this.watch;
+    const spots = { tgt1: plan.t1, tgt2: plan.mover.base, tgt3: plan.far, [SHOOT_BOT.id]: plan.bot };
+    for (const id of Object.keys(spots)) {
+      const p = sim.players.get(id);
+      if (!p) continue;
+      const was = this.dummyAlive.get(id);
+      const home = this.targetHome.get(id) || spots[id];
+      if (p.alive && was === false) {
+        p.x = home.x; p.z = home.z;
+        p.vx = 0; p.vz = 0;
+        p.respawnAt = 0;
+        p.heat = 0;
+        if (id === SHOOT_BOT.id && !p.active) p.dummy = true;
+      }
+      if (was === true && !p.alive) {
+        if (id === 'tgt1') w.fixedKills++;
+        if (id === SHOOT_BOT.id) w.duelKills++;
+      }
+      this.dummyAlive.set(id, p.alive);
+      if (!p.alive) continue;
+      if (id === 'tgt2') {
+        // phase from the sim clock: a long frame (several sim steps) must not
+        // slow the target down, otherwise the lead practice changes with fps
+        const ph = sim.t * 1.25;
+        const off = Math.sin(ph) * plan.mover.half;
+        p.x = home.x + plan.mover.axis.x * off;
+        p.z = home.z + plan.mover.axis.z * off;
+        const v = Math.cos(ph) * plan.mover.half * 1.25;
+        p.vx = plan.mover.axis.x * v;
+        p.vz = plan.mover.axis.z * v;
+      } else if (id === SHOOT_BOT.id && !p.active) {
+        p.x = home.x; p.z = home.z;
+        p.vx = 0; p.vz = 0;
+      }
+      // targets always face the shooter; the live sparring bot aims for itself
+      if (p.dummy) p.aim = Math.atan2(me.z - p.z, me.x - p.x);
+    }
+  }
+
+  /** Count the hits the sim reports for us (before snapshot() drains the queue). */
+  tallyHits(sim) {
+    const w = this.watch;
+    if (!w || !sim) return;
+    for (const e of sim.fx) {
+      if (e.e !== 'heatHit' || e.attacker !== YOU) continue;
+      w.hits++;
+      const me = sim.players.get(YOU);
+      const d = me ? Math.hypot(e.x - me.x, e.z - me.z) : 0;
+      if (d >= 11) w.farHits++;
+      if (e.id === 'tgt2') w.moverHits++;
+      if (me && me.heat <= 60) w.coolHits++;
+    }
+    if (this.mode !== 'shooting') return;
+    const me = sim.players.get(YOU);
+    if (me && me.heat > 75 && w.coolHits > 0) {
+      w.coolHits = 0;
+      this.ui?.toast?.('热量超过 75 · 点射连击断了，先停手降到 60 以下', 'err');
     }
   }
 
@@ -472,6 +698,12 @@ export class Tutorial {
     if (me.item) this.lastItem = me.item;
     else if (this.lastItem) { w.itemsUsed++; this.lastItem = null; }
 
+    if (this.mode === 'shooting') {
+      const shots = me.stats.shots || 0;
+      const acc = shots ? Math.round(((me.stats.hits || 0) / shots) * 100) : 0;
+      this.ui?.setTutorialStat?.(`命中 ${me.stats.hits || 0} / 射击 ${shots} · 命中率 ${acc}% · 热量 ${Math.round(me.heat)}`);
+    }
+
     const step = this.steps[this.stepIndex];
     if (step && step.done(w)) {
       this.audio?.sfx?.('ui', { volume: 0.5 });
@@ -510,9 +742,23 @@ export class Tutorial {
   setStep(index) {
     this.stepIndex = index;
     const st = this.steps[index];
-    this.ui?.showTutorial?.(this.steps, index, this.mode === 'advanced' ? '进阶训练' : '新手教程');
+    this.ui?.showTutorial?.(this.steps, index, this.rangeLabel, this.mode);
     if (!st || !this.sim) return;
     if (st.id === 'heat') this.armHeatBurst();
+    // 点射控温 counts a fresh streak inside its own step
+    if (st.id === 'control' && this.watch) this.watch.coolHits = 0;
+    if (st.id === 'duel') {
+      // wake the sparring bot: up to here it has been a frozen prop
+      const bot = this.sim.players.get(SHOOT_BOT.id);
+      if (bot) {
+        bot.dummy = false;
+        bot.active = true;
+        bot.alive = true;
+        bot.heat = Math.min(bot.heat, 20);
+        bot.x = this.shootPlan?.bot?.x ?? bot.x;
+        bot.z = this.shootPlan?.bot?.z ?? bot.z;
+      }
+    }
     if (st.tip) this.ui?.toast?.(st.tip, 'ok');
     // the basic tutorial hands you one item; the advanced one uses the real
     // supply rhythm (bots steal drops, which is the lesson)
@@ -531,6 +777,7 @@ export class Tutorial {
     const sim = this.sim;
     const me = sim.players.get(YOU);
     this.heatBurst = { active: true, next: sim.t + 0.8, shots: 0, until: sim.t + 9, topped: false };
+    if (me?.inCooler) this.ui?.toast?.('你正站在散热区里：先走出蓝色光圈，才感觉得到中弹升温', 'err');
     const cooler = this.layout?.cooler;
     if (cooler && this.ui?.toast) {
       const d = Math.round(Math.hypot(cooler.x - me.x, cooler.z - me.z));
@@ -553,6 +800,38 @@ export class Tutorial {
     if (hb.shots >= 9 || sim.t < hb.next) return;
     const shooter = [...sim.players.values()].find((p) => p.dummy && p.alive);
     if (!shooter) return;
+    // The trainee wanders while practising, and the other dummy may end up in
+    // the line of fire. Both would send bolts into a wall and the heat bar —
+    // the whole point of this step — would not move, so hop the shooter to a
+    // clear spot around the player first.
+    const otherDummyInTheWay = (x, z) => {
+      const dx = me.x - x, dz = me.z - z;
+      const len2 = dx * dx + dz * dz || 1;
+      for (const q of sim.players.values()) {
+        if (q === shooter || !q.dummy || !q.alive) continue;
+        let t = ((q.x - x) * dx + (q.z - z) * dz) / len2;
+        t = Math.max(0, Math.min(1, t));
+        if (Math.hypot(q.x - (x + dx * t), q.z - (z + dz * t)) < 1.7) return true;
+      }
+      return false;
+    };
+    const clear = (x, z) => Math.abs(x) < sim.arena.half - 1.5 && Math.abs(z) < sim.arena.half - 1.5
+      && !pointBlocked(sim.arena, x, z, 0.8)
+      && hasLineOfSight(sim.arena, x, z, me.x, me.z)
+      && !otherDummyInTheWay(x, z);
+    if (!clear(shooter.x, shooter.z)) {
+      for (let k = 0; k < 16 && !clear(shooter.x, shooter.z); k++) {
+        const a = (k / 16) * Math.PI * 2;
+        for (const d of [6.5, 8, 5]) {
+          const x = me.x + Math.cos(a) * d;
+          const z = me.z + Math.sin(a) * d;
+          if (!clear(x, z)) continue;
+          shooter.x = x; shooter.z = z;
+          shooter.vx = 0; shooter.vz = 0;
+          break;
+        }
+      }
+    }
     shooter.aim = Math.atan2(me.z - shooter.z, me.x - shooter.x);
     // slightly hotter than a live bolt so the lesson lands in a few seconds
     sim.fireBullet(shooter, false, { speed: 14, heat: 11 });
