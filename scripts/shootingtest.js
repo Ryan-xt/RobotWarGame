@@ -13,6 +13,7 @@ const errors = trackConsoleErrors();
 const { UI } = await import('../src/ui.js');
 const { Game } = await import('../src/game.js');
 const { Tutorial, SHOOTING_STEPS } = await import('../src/tutorial.js');
+const THREE = await import('three');
 
 let failures = 0;
 const ok = (cond, label, extra = '') => {
@@ -115,6 +116,42 @@ sim.addHeat(bot, 40, 'bullet', 'you');
 frame(4);
 ok(tutorial.watch.duelKills >= 1, '击倒实战靶机记一次', `duelKills=${tutorial.watch.duelKills}`);
 ok(finished, '五步走完，射击篇结算');
+
+// ---------------------------------------------------------------- 真开枪
+// 上面用 addHeat 直接模拟命中，这里再走一遍真实输入链路：把鼠标移到靶子上，
+// 按住左键，让客户端预测 + 服务器权威子弹真的把它打下线。
+console.log('\n[真开枪] 鼠标瞄准 + 左键');
+{
+  const ui2 = new UI({ audio: fakeAudio(), handlers: {} });
+  ui2.hideLoading();
+  const game2 = new Game({ stage, audio: fakeAudio(), ui: ui2, send: () => {} });
+  const tut2 = new Tutorial({
+    game: game2, ui: ui2, audio: fakeAudio(),
+    profile: { name: '新兵', mech: 'assault', colorId: 'cyan' }, mode: 'shooting',
+  });
+  tut2.start({ mode: 'shooting', onFinish: () => {}, onExit: () => {} });
+  const sim2 = tut2.sim;
+  for (let i = 0; i < 60 * 4; i++) { tut2.update(DT); game2.update(DT); }
+  const aimAt = (x, z) => {
+    const cam = game2.camera;
+    cam.updateMatrixWorld();
+    cam.matrixWorldInverse.copy(cam.matrixWorld).invert();
+    const v = new THREE.Vector3(x, 0, z).project(cam);
+    game2.mouse.x = (v.x * 0.5 + 0.5) * window.innerWidth;
+    game2.mouse.y = (-v.y * 0.5 + 0.5) * window.innerHeight;
+  };
+  game2.mouse.down = true;
+  for (let i = 0; i < 60 * 14 && tut2.stepIndex === 0; i++) {
+    const t = sim2.players.get('tgt1');
+    if (t && t.alive) aimAt(t.x, t.z);
+    tut2.update(DT);
+    game2.update(DT);
+  }
+  game2.mouse.down = false;
+  ok(tut2.watch.fixedKills >= 1, '真实开火击毁固定靶', `fixedKills=${tut2.watch.fixedKills}`);
+  ok(tut2.stepIndex >= 1, '打完自动进入下一步', String(tut2.stepIndex));
+  tut2.exit();
+}
 
 console.log(errors.length ? 'CONSOLE ERRORS:\n' + errors.join('\n') : 'no console errors');
 const pass = failures === 0 && errors.length === 0;
