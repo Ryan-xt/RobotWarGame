@@ -102,6 +102,7 @@ button { cursor: pointer; }
 .btn.big .btn-text b { font-size: 19px; letter-spacing: .1em; }
 .btn.ghost { background: rgba(11, 13, 13, .5); }
 .btn.small { padding: 8px 12px; font-size: 11px; }
+.btn.tiny { padding: 6px 9px; font-size: 10px; line-height: 1.35; }
 .btn.icon-only { padding: 8px 10px; }
 .btn .btn-ico { font-size: 20px; width: 26px; text-align: center; filter: drop-shadow(0 0 8px rgba(255,200,80,.7)); }
 .btn-row { display: flex; gap: 8px; flex-wrap: wrap; }
@@ -352,6 +353,21 @@ button { cursor: pointer; }
 .help-tips { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 22px 20px; }
 .help-tips span { font-size: 9.5px; color: var(--faint); border: 1px solid var(--line); padding: 4px 7px; }
 .archive-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; padding: 18px 22px; }
+/* 机体专训：每台机体一张卡，两张课按钮 */
+.mech-train-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(232px, 1fr)); gap: 10px; margin-top: 12px; }
+.mech-train-card { border: 1px solid var(--line); background: rgba(0,0,0,.24); padding: 11px 12px 12px; display: flex; flex-direction: column; gap: 6px; }
+.mt-head { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
+.mt-head h4 { margin: 0; font-family: var(--cn); font-size: 15px; letter-spacing: .06em; }
+.mt-en { font-size: 8px; letter-spacing: .16em; color: var(--faint); margin-left: 5px; }
+.mt-role { font-size: 8px; letter-spacing: .14em; color: var(--amber); text-transform: uppercase; }
+.mt-dot { width: 8px; height: 8px; border-radius: 50%; box-shadow: 0 0 8px currentColor; }
+.mt-play { margin: 0; font-family: var(--cn); font-size: 10px; line-height: 1.6; color: var(--faint); }
+.mt-skill, .mt-passive { font-size: 9px; line-height: 1.55; color: var(--dim); }
+.mt-skill b, .mt-passive b { display: block; color: #d9d2c2; font-weight: 600; margin-bottom: 1px; }
+.mt-actions { display: flex; flex-direction: column; gap: 5px; margin-top: 4px; }
+.mech-lesson-btn { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; text-align: left; }
+.mech-lesson-btn small { font-size: 8.5px; letter-spacing: .04em; color: var(--faint); }
+.mech-lesson-btn.done { border-color: rgba(122,255,170,.45); color: #9dffc4; }
 .archive-item { border: 1px solid var(--line); background: rgba(0,0,0,.2); padding: 12px; }
 .archive-item h4 { margin: 0 0 2px; font-family: var(--cn); font-size: 15px; letter-spacing: .06em; }
 .archive-item .ar-role { font-size: 8px; letter-spacing: .15em; color: var(--amber); text-transform: uppercase; }
@@ -766,6 +782,7 @@ body[data-quality="low"] .countdown { background: rgba(0,0,0,.35); }
 .tut-current { border-top: 1px solid var(--line); padding-top: 9px; margin-bottom: 10px; }
 .tut-text { margin: 0 0 6px; font-family: var(--cn); font-size: 11.5px; line-height: 1.65; color: #cfc7b6; }
 .tut-goal { margin: 0; font-size: 10px; letter-spacing: .06em; color: var(--amber); }
+.tut-tip { margin: 5px 0 0; font-family: var(--cn); font-size: 10px; line-height: 1.6; color: #8fa6a2; }
 .tut-actions { display: flex; gap: 8px; justify-content: flex-end; }
 
 .tut-done {

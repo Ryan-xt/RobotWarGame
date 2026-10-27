@@ -73,9 +73,15 @@ class ParticleSystem {
     const c = opts.color instanceof THREE.Color ? opts.color : new THREE.Color(opts.color || '#ffffff');
     p.r = c.r; p.g = c.g; p.b = c.b;
     p.fade = opts.fade ?? 0.6;
+    this.live = true;
   }
 
   update(dt) {
+    // Nothing alive: skip the whole loop *and* the four GPU buffer uploads.
+    // Between fights that is several megabytes per frame that used to be sent
+    // to the GPU for no reason.
+    if (!this.live) return;
+    let alive = 0;
     const pos = this.positions, col = this.colors, sz = this.sizes, al = this.alphas;
     for (let i = 0; i < this.count; i++) {
       const p = this.parts[i];
@@ -87,6 +93,7 @@ class ParticleSystem {
       p.vz *= Math.pow(p.drag, dt * 60);
       p.x += p.vx * dt; p.y += p.vy * dt; p.z += p.vz * dt;
       if (p.y < 0.03) { p.y = 0.03; p.vy *= -0.28; p.vx *= 0.6; p.vz *= 0.6; }
+      alive++;
       const t = p.life / p.maxLife;
       const alpha = t < 0.15 ? t / 0.15 : 1 - (t - 0.15) / 0.85;
       pos[i * 3] = p.x; pos[i * 3 + 1] = p.y; pos[i * 3 + 2] = p.z;
@@ -98,6 +105,7 @@ class ParticleSystem {
     this.points.geometry.attributes.pcolor.needsUpdate = true;
     this.points.geometry.attributes.size.needsUpdate = true;
     this.points.geometry.attributes.alpha.needsUpdate = true;
+    this.live = alive > 0;
   }
 
   dispose() {

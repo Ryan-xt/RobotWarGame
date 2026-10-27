@@ -76,6 +76,7 @@
         <button id="btn-tutorial" class="btn"><span class="btn-text"><b>新手教程</b><small>2 分钟学会五个按键 · 单机</small></span></button>
         <button id="btn-shooting" class="btn"><span class="btn-text"><b>射击训练</b><small>固定靶 / 移动靶 / 远靶 / 点射 / 实战靶机</small></span></button>
         <button id="btn-training" class="btn"><span class="btn-text"><b>进阶训练</b><small>和 2 台会还手的 AI 练走位 · 练完就能打赢</small></span></button>
+        <button id="btn-mech-train" class="btn"><span class="btn-text"><b>机体专训</b><small>六台机体 × 专属教程 + 进阶玩法 · 每台都不一样</small></span></button>
         <button id="btn-create" class="btn"><span class="btn-text"><b>创建房间</b><small>设定模式 / AI / 事件频率</small></span></button>
         <button id="btn-join" class="btn"><span class="btn-text"><b>加入房间</b><small>房间码或局域网列表</small></span></button>
         <div class="btn-row">
@@ -308,6 +309,15 @@
     </div>
   </div>
 
+  <div id="modal-mech-train" class="modal hidden">
+    <div class="modal-card wide">
+      <header><h3>机体专训 · 每台机体两套课</h3><button class="modal-x" data-close="modal-mech-train">✕</button></header>
+      <p class="modal-lead">专属教程讲这台机体的技能、怎么打中、它的脾气；进阶玩法讲连招、怎么活下来、怎么打赢 AI。
+        课程用你点的那台机体，不用先去换机。</p>
+      <div id="mech-train-grid" class="mech-train-grid"></div>
+    </div>
+  </div>
+
   <div id="modal-mechs" class="modal hidden">
     <div class="modal-card wide">
       <header><h3>机甲档案 · 废物利用指南</h3><button class="modal-x" data-close="modal-mechs">✕</button></header>
@@ -331,8 +341,8 @@
 
   <div id="tut-done" class="tut-done hidden">
     <div class="tut-done-card">
-      <h3>教程完成</h3>
-      <p class="tut-done-sub">五个按键，就这么多。剩下的是角度和运气。</p>
+      <h3 id="tut-done-title">教程完成</h3>
+      <p id="tut-done-sub" class="tut-done-sub">五个按键，就这么多。剩下的是角度和运气。</p>
       <div class="tut-keys">
         <div><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd><span>移动</span></div>
         <div><kbd>左键</kbd><span>电磁弹 · 蓄力</span></div>

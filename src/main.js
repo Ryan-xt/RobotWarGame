@@ -13,6 +13,7 @@ const LS_SETTINGS = 'overload.settings.v1';
 const LS_TUTORIAL = 'overload.tutorial.v1';
 const LS_TRAINING = 'overload.training.v1';
 const LS_SHOOTING = 'overload.shooting.v1';
+const LS_MECH = 'overload.mechlessons.v1';
 const SS_SESSION = 'overload.session.v1';
 
 function loadJSON(key, fallback) {
@@ -106,6 +107,7 @@ const ui = new UI({
     onTutorial: guard('onTutorial', () => startTutorial('basic')),
     onTraining: guard('onTraining', () => startTutorial('advanced')),
     onShooting: guard('onShooting', () => startTutorial('shooting')),
+    onMechTrain: guard('onMechTrain', (mechId, level) => startTutorial('mech', { mechId, level })),
     onTutorialSkip: guard('onTutorialSkip', () => tutorial.skipStep()),
     onTutorialExit: guard('onTutorialExit', () => exitTutorial()),
     onTutorialFight: guard('onTutorialFight', () => { exitTutorial(); startQuickplay(); }),
@@ -406,7 +408,7 @@ function safeAudio() {
   try { audio.resume(); } catch (e) { reportClient('audio-fail', e); }
 }
 
-function startTutorial(mode = 'basic') {
+function startTutorial(mode = 'basic', opts = {}) {
   safeAudio();
   if (view === 'game' && tutorial.active) return;
   if (ui.currentRoom) { net.send({ type: 'leave' }); ui.currentRoom = null; }
@@ -417,10 +419,23 @@ function startTutorial(mode = 'basic') {
   ui.showScreen('game');
   const advanced = mode === 'advanced';
   const shooting = mode === 'shooting';
+  const mech = mode === 'mech';
+  const mechId = opts.mechId || profile?.mech || 'assault';
+  const level = opts.level || 'tutorial';
   try {
     tutorial.start({
       mode,
+      mechId,
+      level,
       onFinish: () => {
+        if (mech) {
+          const all = loadJSON(LS_MECH, {});
+          all[mechId] = { ...(all[mechId] || {}), [level]: true };
+          saveJSON(LS_MECH, all);
+          ui.setMechProgress?.(all);
+          reportClient('mech-lesson-done:' + mechId + ':' + level);
+          return;
+        }
         const key = shooting ? LS_SHOOTING : advanced ? LS_TRAINING : LS_TUTORIAL;
         const prev = loadJSON(key, {});
         saveJSON(key, { done: true, at: Date.now(), times: (prev.times || 0) + 1 });
@@ -431,7 +446,8 @@ function startTutorial(mode = 'basic') {
       },
       onExit: () => {},
     });
-    reportClient(shooting ? 'shooting-start' : advanced ? 'training-start' : 'tutorial-start');
+    reportClient(mech ? `mech-lesson-start:${mechId}:${level}`
+      : shooting ? 'shooting-start' : advanced ? 'training-start' : 'tutorial-start');
   } catch (err) {
     reportClient('tutorial-fail', err);
     ui.showError('教程启动失败: ' + (err.message || err));
@@ -445,6 +461,7 @@ function refreshTrainingBadge() {
   ui.setTutorialButtonDone?.(tutorialDone());
   ui.setTrainingButtonDone?.(!!loadJSON(LS_TRAINING, {}).done);
   ui.setShootingButtonDone?.(!!loadJSON(LS_SHOOTING, {}).done);
+  ui.setMechProgress?.(loadJSON(LS_MECH, {}));
 }
 
 function exitTutorial() {

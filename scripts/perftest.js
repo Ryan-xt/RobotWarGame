@@ -105,26 +105,58 @@ ok(report['snapshot apply (ms)'] < 2.5, 'snapshot apply stays under 2.5 ms', `${
 ok(report['ui.updateHUD (ms)'] < 2, 'HUD update stays under 2 ms', `${report['ui.updateHUD (ms)']} ms`);
 ok(report['drawMinimap (ms)'] < 1.2, 'minimap redraw stays under 1.2 ms (cached base layer)', `${report['drawMinimap (ms)']} ms`);
 
+// ------------------------------------------------------------------ draw budget
+// Every mesh is a draw call (and the shadow pass draws the casters again), so
+// the scene has to stay compact. This is the regression guard for the batching
+// pass: before it, an 8-player match on the 48 m map had ~1365 meshes.
+const { sceneCost } = await import('../src/batch.js');
+const cost = sceneCost(game.scene);
+console.log('scene:', cost);
+ok(cost.meshes <= 950, '8 players / 48 m: meshes stayed under 950', `${cost.meshes}`);
+let casters = 0;
+game.scene.traverse((o) => { if (o.isMesh && o.castShadow) casters++; });
+ok(casters <= 420, 'shadow casters are bounded', `${casters}`);
+ok(cost.lights <= 14, 'lights are a fixed budget', `${cost.lights}`);
+ok(cost.triangles < 90000, 'triangle count is sane', `${cost.triangles}`);
+
 // ------------------------------------------------------------------ adaptive ladder
-game.fps = 28;
+// Helper: feed the FPS counter a steady rate (update() recomputes FPS from
+// fpsFrames/fpsAcc, so both have to be set).
+const feedFps = (fps, frames) => {
+  for (let i = 0; i < frames; i++) {
+    game.fpsAcc = 10 - 0.05;
+    game.fpsFrames = Math.round(fps * 10);
+    game.update(0.05);
+  }
+};
+
+// 1) resolution drops first — it is the cheapest fix and keeps the look
+game.ui.settings.quality = 'med';
+game.ui.settings.renderScale = 1;
+game.dynScale = 1;
+game.dynLowTime = 0;
+game.lowFpsTime = 0;
+game.applyQuality('med', 1);
+const scaleBefore = stage.renderScale;
+feedFps(45, 40);
+ok(stage.renderScale < scaleBefore, '45 fps lowers the render resolution first', `${scaleBefore} → ${stage.renderScale}`);
+ok(game.ui.settings.quality === 'med', 'and the visual preset is kept while it can', game.ui.settings.quality);
+const lowScale = stage.renderScale;
+
+// 2) back up when the frames come back
+feedFps(70, 200);
+ok(stage.renderScale > lowScale, 'and it climbs back when the frames return', `${lowScale} → ${stage.renderScale}`);
+
+// 3) only a really slow machine loses the preset
+game.dynScale = 0.55;
 game.ui.settings.quality = 'high';
 game.lowFpsTime = 0;
 const before = stage.qualityCalls.length;
-for (let i = 0; i < 40; i++) {
-  game.fpsAcc = 1;
-  game.fpsFrames = 30;
-  game.update(0.05);
-}
+feedFps(30, 60);
 const ladder = stage.qualityCalls.slice(before);
-ok(ladder[0] === 'med', 'low FPS steps high → med first', ladder.join('→'));
-game.ui.settings.quality = 'med';
+ok(ladder.includes('med'), 'below 42 fps the preset steps high → med', ladder.join('→'));
 game.lowFpsTime = 0;
-game.lowFpsTime = 0;
-for (let i = 0; i < 60; i++) {
-  game.fpsAcc = 1;
-  game.fpsFrames = 28;
-  game.update(0.05);
-}
+feedFps(30, 80);
 ok(game.ui.settings.quality === 'low', 'sustained low FPS steps med → low', game.ui.settings.quality);
 ok(stage.qualityCalls.length > before, 'stage received the new preset', stage.qualityCalls.join('→'));
 

@@ -3,6 +3,7 @@ import {
   groundTexture, metalTexture, hazardTexture, glowTexture, iconTexture, signTexture,
   scorchTexture, smokeTexture, noiseTexture,
 } from './textures.js';
+import { batchStatic, batchWorld } from './batch.js';
 
 function mat(opts) { return new THREE.MeshStandardMaterial(opts); }
 
@@ -61,6 +62,23 @@ export class ArenaView {
     this.buildBoundary();
     this.buildDust();
     this.buildLightPool();
+    // Draw-call compression, two passes:
+    //   1. sibling merge — a cooling vent used to be 12 separate meshes
+    //   2. world merge  — props / fences / signs / silhouettes never move or
+    //      toggle, so they are baked per material into a few draws
+    // Animated groups (vents, acids, towers, walls, plates) and transparent
+    // surfaces are left exactly as they are.
+    this.batchStats = batchStatic(this.group);
+    const animated = [
+      ...this.coolers.map((c) => c.g),
+      ...this.acids.map((a) => a.g || a.glow?.parent),
+      ...this.towers.map((t) => t.g),
+      ...[...this.wallMeshes.values()].map((w) => w.group),
+      ...[...this.dynamicPlates.values()].map((p) => p),
+      ...(this.decor || []),
+      this.dust,
+    ].filter(Boolean);
+    this.batchWorldStats = batchWorld(this.group, { exclude: animated });
   }
 
   // ------------------------------------------------------------- lights

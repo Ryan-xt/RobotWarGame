@@ -186,6 +186,30 @@ document.getElementById('btn-tut-exit').onclick({ target: document.getElementByI
 await waitUntil(() => !app.ui.screenMenu.classList.contains('hidden'), 4000, 'menu after shooting');
 ok(!app.tutorial.active, '退出射击训练回到菜单');
 
+// ---------------------------------------------------------------- 机体专训
+document.getElementById('btn-mech-train').onclick({ target: document.getElementById('btn-mech-train') });
+ok(!document.getElementById('modal-mech-train').classList.contains('hidden'), '机体专训弹窗打开');
+const cards = document.querySelectorAll('#mech-train-grid .mech-train-card');
+ok(cards.length === 6, '六台机体各一张卡', String(cards.length));
+const lessonBtns = document.querySelectorAll('#mech-train-grid .mech-lesson-btn');
+ok(lessonBtns.length === 12, '每台机体两套课 = 12 个入口', String(lessonBtns.length));
+const sniperBtn = document.querySelector('#mech-train-grid .mech-lesson-btn[data-mech="sniper"][data-level="advanced"]');
+ok(!!sniperBtn, '长钉的进阶玩法入口在');
+app.ui.handlers.onMechTrain('sniper', 'advanced');
+await waitUntil(() => app.tutorial.active && app.tutorial.mode === 'mech', 4000, 'mech lesson start');
+ok(app.tutorial.mode === 'mech' && app.tutorial.mechId === 'sniper' && app.tutorial.level === 'advanced',
+  '从菜单直接进入「长钉 · 进阶玩法」',
+  `${app.tutorial.mechId}/${app.tutorial.level}`);
+ok(app.tutorial.sim.players.get('you').mech === 'sniper', '课程用的就是这台机体');
+ok(app.tutorial.steps.length === 3, '进阶玩法三步', String(app.tutorial.steps.length));
+ok(document.getElementById('modal-mech-train').classList.contains('hidden'), '开课后机体专训弹窗自动收起');
+ok(document.getElementById('hud-mode').textContent === '长钉 · 进阶玩法', 'HUD 显示课程名',
+  document.getElementById('hud-mode').textContent);
+ok(document.querySelectorAll('#tut-panel .tut-tip').length === 1, '面板显示提示行');
+document.getElementById('btn-tut-exit').onclick({ target: document.getElementById('btn-tut-exit') });
+await waitUntil(() => !app.ui.screenMenu.classList.contains('hidden'), 4000, 'menu after mech lesson');
+ok(!app.tutorial.active, '退出机体专训回到菜单');
+
 // ---------------------------------------------------------------- 战场图鉴
 document.getElementById('btn-fieldguide').onclick({ target: document.getElementById('btn-fieldguide') });
 ok(!document.getElementById('modal-field').classList.contains('hidden'), '战场图鉴弹窗打开');

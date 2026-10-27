@@ -256,7 +256,7 @@ export class MatchSim {
     if (!opts.silent) {
       this.fxEmit({
         e: 'heatHit', x: p.x, z: p.z, id: p.id, amount: Math.round(applied),
-        source, attacker: attackerId, bounced: !!opts.bounced,
+        source, attacker: attackerId, bounced: !!opts.bounced, self: !!opts.selfDestruct,
       });
     }
     if (p.heat >= HEAT.max) this.shortCircuit(p, attackerId, source, opts);
@@ -281,7 +281,12 @@ export class MatchSim {
       if (killer) {
         killer.score += 1;
         killer.stats.kills++;
-        if (isFurnace && (source === 'furnace' || opts.chainSource === 'furnace')) killer.stats.selfDestructKills++;
+        // 自爆击杀算在「点火的那台炉心」头上，而不是死掉的那台（以前看的是
+        // 受害者机型，所以连环爆几乎永远不记「自爆艺术家」）。
+        const killerIsFurnace = mechOf(killer.mech).id === 'furnace';
+        if (killerIsFurnace && (source === 'furnace' || opts.chainSource === 'furnace')) {
+          killer.stats.selfDestructKills++;
+        }
       }
     }
     if (!suicide) p.score -= 1;
@@ -303,7 +308,9 @@ export class MatchSim {
       const d = dist(other.x, other.z, p.x, p.z);
       if (d <= radius) {
         const falloff = 1 - (d / radius) * 0.45;
-        this.addHeat(other, HEAT.explosionHeat * falloff, 'explosion', p.id, { chainSource: source });
+        this.addHeat(other, HEAT.explosionHeat * falloff, 'explosion', p.id, {
+          chainSource: source, selfDestruct: !!opts.selfDestruct,
+        });
         this.knockback(other, other.x - p.x, other.z - p.z, 9);
         if (attackerId === p.id || attackerId == null) { /* self-destruct chain */ }
         if (p.id != null) {
@@ -736,7 +743,8 @@ export class MatchSim {
               const src = this.players.get(attackerId);
               if (src) src.stats.bounceHits++;
             }
-            this.addHeat(target, heat, bounced ? 'bounceBolt' : 'bolt', attackerId, { bounced });
+            const hitSource = bounced ? 'bounceBolt' : b.type === 'rail' ? 'rail' : 'bolt';
+            this.addHeat(target, heat, hitSource, attackerId, { bounced });
             this.fxEmit({
               e: 'hitMarker', x: target.x, z: target.z, target: target.id, owner: attackerId,
               amount: Math.round(heat)
@@ -991,7 +999,7 @@ export class MatchSim {
     if (m.dead) return;
     m.dead = true;
     const radius = 3;
-    this.fxEmit({ e: 'mineBoom', x: m.x, z: m.z, radius });
+    this.fxEmit({ e: 'mineBoom', x: m.x, z: m.z, radius, owner: byId });
     for (const p of this.players.values()) {
       if (!p.alive) continue;
       const d = dist(p.x, p.z, m.x, m.z);
@@ -1177,7 +1185,9 @@ export class MatchSim {
 
   // ----------------------------------------------------------------- skills
   useSkill(p) {
-    if (!p.alive || this.t < p.skillCdUntil || p.stunUntil > this.t || p.channelEnd > this.t) return;
+    // 炉心的「取消引信」不排队等冷却：冷却比引信还长的话，这一招永远按不出来
+    const cancelFuse = p.mech === 'furnace' && p.fuseEnd > 0;
+    if (!p.alive || (!cancelFuse && this.t < p.skillCdUntil) || p.stunUntil > this.t || p.channelEnd > this.t) return;
     const mech = mechOf(p.mech);
     const setCd = (v) => { p.skillCdUntil = this.t + v; };
     if (p.mech === 'assault') {

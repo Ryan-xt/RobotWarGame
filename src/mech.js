@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { mechOf } from '../shared/mechs.js';
 import { glowTexture, hazardTexture, nameTexture } from './textures.js';
+import { batchStatic } from './batch.js';
 
 const GEO = {
   box: new THREE.BoxGeometry(1, 1, 1),
@@ -314,6 +315,13 @@ export function createMech(mechId, playerColor, playerName = '', opts = {}) {
     baseY: 0, bob: 0,
   };
   group.userData.mech = parts;
+  // Compress the hull: a mech is ~45 little boxes (one draw call each, plus a
+  // shadow pass for every one of them). Anything the animation touches is
+  // flagged first, then only the remaining decorative siblings are merged.
+  for (const v of Object.values(parts)) {
+    if (v && v.isObject3D) v.userData.noBatch = true;
+  }
+  batchStatic(group);
   return parts;
 }
 

@@ -22,7 +22,8 @@
     "feel": "node scripts/feeltest.js",
     "hit": "node scripts/hittest.js",
     "training": "node scripts/trainingtest.js",
-    "shooting": "node scripts/shootingtest.js"
+    "shooting": "node scripts/shootingtest.js",
+    "mechlessons": "node scripts/mechlessonstest.js"
   },
   "dependencies": {
     "three": "0.186.1",

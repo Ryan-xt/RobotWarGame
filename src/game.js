@@ -26,7 +26,7 @@ const easeOut = (t) => 1 - Math.pow(1 - t, 3);
 const DASH_SPEED = (DASH.distance / DASH.duration) * 1.02;
 
 const SOURCE_NAMES = {
-  bolt: '电磁弹', bounceBolt: '反弹弹', charge: '冲撞', hook: '钩爪', mine: '电磁地雷',
+  bolt: '电磁弹', bounceBolt: '反弹弹', rail: '蓄力弹', charge: '冲撞', hook: '钩爪', mine: '电磁地雷',
   grenade: '电磁手雷', tower: '电磁塔', acid: '酸液池', storm: '电磁风暴', claw: '巨型机械臂',
   explosion: '连锁爆炸', furnace: '炉心自爆', wallBreak: '铁皮墙',
 };
@@ -168,6 +168,9 @@ export class Game {
     this.applyQuality(this.ui.settings.quality, this.ui.settings.renderScale);
     this.lowFpsTime = 0;
     this.autoDegrades = 0;
+    this.dynScale = this.ui.settings.renderScale ?? 1;
+    this.dynLowTime = 0;
+    this.dynHighTime = 0;
   }
 
   setRoomCode(code) { this.currentRoomCode = code; }
@@ -811,7 +814,7 @@ export class Game {
   tagFor(source, furnace) {
     if (furnace) return '自爆';
     return {
-      bounceBolt: '反弹', bolt: '短路', charge: '冲撞', hook: '钩爪', mine: '地雷',
+      bounceBolt: '反弹', bolt: '短路', rail: '蓄力', charge: '冲撞', hook: '钩爪', mine: '地雷',
       grenade: '手雷', tower: '电磁塔', acid: '酸液', storm: '风暴', claw: '机械臂',
       explosion: '连锁', furnace: '自爆', wallBreak: '铁皮墙',
     }[source] || '';
@@ -1381,20 +1384,45 @@ export class Game {
       const tiers = ['high', 'med', 'low'];
       const current = this.ui.settings.quality || 'high';
       const idx = tiers.indexOf(current);
-      if (this.fps < 40 && idx >= 0 && idx < tiers.length - 1) {
+      if (this.fps < 42 && idx >= 0 && idx < tiers.length - 1) {
         this.lowFpsTime += 0.5;
-        const limit = current === 'high' ? 3 : 4;
+        const limit = current === 'high' ? 2.5 : 3.5;
         if (this.lowFpsTime >= limit) {
           this.lowFpsTime = 0;
           const next = tiers[idx + 1];
           this.ui.settings.quality = next;
-          this.applyQuality(next);
+          this.applyQuality(next, this.dynScale);
           try { this.ui.syncQualitySelect?.(next); } catch {}
           this.ui.toast(`帧率 ${this.fps} · 已自动降到「${next === 'med' ? '中' : '低'}」画质`, 'err');
           this.autoDegrades = (this.autoDegrades || 0) + 1;
         }
       } else {
         this.lowFpsTime = Math.max(0, this.lowFpsTime - 0.25);
+      }
+      // Last resort before dropping the preset: render fewer pixels. This is
+      // the single cheapest win on a high-DPI laptop (a 2× screen is 4× the
+      // fill rate) and it is invisible on a 30 m arena, so it is preferred
+      // over switching the whole scene to flat 'low' quality.
+      const baseScale = this.ui.settings.renderScale ?? 1;
+      this.dynScale = this.dynScale ?? baseScale;
+      if (this.fps < 52 && this.dynScale > 0.55) {
+        this.dynLowTime = (this.dynLowTime || 0) + 0.5;
+        if (this.dynLowTime >= 1.5) {
+          this.dynLowTime = 0;
+          this.dynScale = Math.max(0.55, Math.round((this.dynScale - 0.1) * 100) / 100);
+          this.applyQuality(this.ui.settings.quality, this.dynScale);
+          this.autoDynamicRes = (this.autoDynamicRes || 0) + 1;
+        }
+      } else {
+        this.dynLowTime = 0;
+        if (this.fps > 58 && this.dynScale < baseScale) {
+          this.dynHighTime = (this.dynHighTime || 0) + 0.5;
+          if (this.dynHighTime >= 4) {
+            this.dynHighTime = 0;
+            this.dynScale = Math.min(baseScale, Math.round((this.dynScale + 0.05) * 100) / 100);
+            this.applyQuality(this.ui.settings.quality, this.dynScale);
+          }
+        } else this.dynHighTime = 0;
       }
     }
     this.advanceRemoteClock(Math.min(0.25, rawDt));

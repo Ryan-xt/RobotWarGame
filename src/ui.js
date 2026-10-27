@@ -1,6 +1,7 @@
 import { MECHS, MECH_LIST, mechOf } from '../shared/mechs.js';
 import { PLAYER_COLORS, ITEM_TYPES, EVENT_META, BULLET } from '../shared/constants.js';
 import { iconTexture } from './textures.js';
+import { MECH_LESSONS, LESSON_META, LESSON_LEVELS, lessonTitle } from './mechlessons.js';
 
 // Memoised lookups: the HUD touches ~40 nodes twenty times per second, and
 // getElementById/querySelector showed up as the largest cost in the profiler.
@@ -41,7 +42,7 @@ export function mechSVG(shape, cls = '') {
   return `<svg class="${cls}" viewBox="0 0 64 64" aria-hidden="true">${parts[shape] || parts.assault}</svg>`;
 }
 
-const TUTORIAL_TITLES = { basic: '新手教程', advanced: '进阶训练', shooting: '射击训练' };
+const TUTORIAL_TITLES = { basic: '新手教程', advanced: '进阶训练', shooting: '射击训练', mech: '机体专训' };
 
 export class UI {
   constructor({ audio, handlers } = {}) {
@@ -140,6 +141,49 @@ export class UI {
     }
   }
 
+  /**
+   * 机体训练中心：六台机体 × 两套课（专属教程 / 进阶玩法）。
+   * 卡片直接由 shared/mechs.js + mechlessons.js 生成，加机体不用改 HTML。
+   */
+  buildMechTrain(progress = this.mechProgress || {}) {
+    this.mechProgress = progress;
+    const wrap = $('mech-train-grid');
+    if (!wrap) return;
+    wrap.innerHTML = '';
+    for (const m of MECH_LIST) {
+      const lessons = MECH_LESSONS[m.id] || { tutorial: [], advanced: [] };
+      const meta = LESSON_META[m.id] || {};
+      const done = progress[m.id] || {};
+      const card = document.createElement('div');
+      card.className = 'mech-train-card';
+      card.dataset.mech = m.id;
+      const buttons = LESSON_LEVELS.map((lv) => {
+        const steps = lessons[lv.id] || [];
+        const ok = !!done[lv.id];
+        return `<button class="btn ghost tiny mech-lesson-btn${ok ? ' done' : ''}"
+          data-mech="${m.id}" data-level="${lv.id}">
+          <b>${ok ? '✓ ' : ''}${lv.label}</b><small>${steps.length} 步 · ${lv.desc}</small>
+        </button>`;
+      }).join('');
+      card.innerHTML = `
+        <div class="mt-head">
+          <span class="mt-dot" style="background:${m.glow || m.accent}"></span>
+          <h4>${m.name}<span class="mt-en">${m.en}</span></h4>
+          <span class="mt-role">${m.role}</span>
+        </div>
+        <p class="mt-play">${meta.playstyle || m.blurb}</p>
+        <div class="mt-skill"><b>右键 · ${m.skill.name}</b>${m.skill.desc}</div>
+        <div class="mt-passive"><b>被动 · ${m.passive.name}</b>${m.passive.desc}</div>
+        <div class="mt-actions">${buttons}</div>`;
+      wrap.appendChild(card);
+    }
+  }
+
+  /** Refresh the ✓ marks after finishing a lesson. */
+  setMechProgress(progress) {
+    this.buildMechTrain(progress || {});
+  }
+
   buildAmmoPips() {
     const pips = $('ammo-pips');
     pips.innerHTML = '';
@@ -164,6 +208,24 @@ export class UI {
     tap('btn-tutorial', () => h.onTutorial?.());
     tap('btn-training', () => h.onTraining?.());
     tap('btn-shooting', () => this.handlers.onShooting?.());
+    tap('btn-mech-train', () => {
+      this.buildMechTrain(this.mechProgress || {});
+      this.openModal('modal-mech-train');
+    });
+    const grid = $('mech-train-grid');
+    if (grid) {
+      grid.onclick = (ev) => {
+        const btn = ev.target?.closest?.('.mech-lesson-btn');
+        if (!btn) return;
+        try { this.click(); } catch {}
+        const mechId = btn.dataset.mech;
+        const level = btn.dataset.level;
+        try { this.handlers.onMechTrain?.(mechId, level); } catch (err) {
+          console.error('[ui] mech lesson failed', err);
+          this.toast('课程启动失败: ' + (err && err.message || ''), 'err');
+        }
+      };
+    }
     tap('btn-fieldguide', () => this.openModal('modal-field'));
     tap('btn-fieldguide-2', () => this.openModal('modal-field'));
     tap('btn-tut-skip', () => h.onTutorialSkip?.());
@@ -330,6 +392,8 @@ export class UI {
     };
     for (const [k, el] of Object.entries(map)) el.classList.toggle('hidden', k !== name);
     if (name === 'game') {
+      // 从「机体专训」弹窗里直接开课：弹窗必须先收起来，不然会盖住教程面板
+      this.closeAllModals?.();
       this.screenGame.classList.add('active');
       document.body.classList.add('in-game');
       document.body.style.cursor = 'none';
@@ -912,7 +976,13 @@ export class UI {
     if (!panel) return;
     const kind = mode || (title.includes('射击') ? 'shooting' : title.includes('进阶') ? 'advanced' : 'basic');
     this.setTutorialMode(true, kind);
-    $('hud-room').textContent = kind === 'advanced' ? 'ROOM TRAINING' : kind === 'shooting' ? 'ROOM RANGE' : 'ROOM TUTORIAL';
+    // 机体课程：面板标题直接用「破阵 · 专属教程」这种具体名字
+    if (kind === 'mech') {
+      const t = document.querySelector('#tut-panel .tut-title');
+      if (t) t.textContent = title;
+    }
+    $('hud-room').textContent = kind === 'mech' ? 'ROOM MECH LAB'
+      : kind === 'advanced' ? 'ROOM TRAINING' : kind === 'shooting' ? 'ROOM RANGE' : 'ROOM TUTORIAL';
     $('hud-mode').textContent = title;
     // the 10-second hint box would sit on top of the tutorial panel
     $('tutorial')?.classList.add('hidden');
@@ -949,6 +1019,12 @@ export class UI {
       g.textContent = '目标：' + st.goal;
       cur.appendChild(t);
       cur.appendChild(g);
+      if (st.tip) {
+        const tip = document.createElement('p');
+        tip.className = 'tut-tip';
+        tip.textContent = '提示：' + st.tip;
+        cur.appendChild(tip);
+      }
     }
     const count = $('tut-count');
     if (count) count.textContent = `${Math.min(index + 1, steps.length)} / ${steps.length}`;
@@ -971,10 +1047,16 @@ export class UI {
     if (el.textContent !== text) el.textContent = text;
   }
 
-  completeTutorial() {
+  /** `info` 用来给机体专训换一张结课卡（默认是新手教程那张） */
+  completeTutorial(info = null) {
     $('tut-panel')?.classList.add('hidden');
     const done = $('tut-done');
-    if (done) done.classList.remove('hidden');
+    if (!done) return;
+    const title = $('tut-done-title');
+    const sub = $('tut-done-sub');
+    if (title) title.textContent = info?.title || '教程完成';
+    if (sub) sub.textContent = info?.sub || '五个按键，就这么多。剩下的是角度和运气。';
+    done.classList.remove('hidden');
   }
 
   hideTutorial() {

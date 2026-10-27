@@ -8,8 +8,12 @@
 //   advanced —— 进阶训练：两台会走会打的简单 AI，五步练走位/反弹/散热/补给/击杀。
 //   shooting —— 射击训练（射击篇）：固定靶 / 移动靶 / 远靶 / 点射控温 / 会还手的靶机，
 //               五步练准星、提前量、距离和热量，练完就能在实战里打到人。
+//   mech     —— 机体专属课程：每台机体两套（专属教程 / 进阶玩法），见 mechlessons.js。
+//               用你选的那台机体打，课程内容按机体技能和被动来判完成。
 import { MatchSim } from '../server/sim.js';
 import { buildArena, arenaSummary, pointBlocked, hasLineOfSight } from '../shared/arena.js';
+import { mechOf } from '../shared/mechs.js';
+import { MECH_LESSONS, LESSON_META, lessonTitle } from './mechlessons.js';
 
 const ARENA_SEED = 20251026;
 const ARENA_SIZE = 30;
@@ -90,6 +94,34 @@ function planLayout(arena, sim) {
     };
   }
   return best;
+}
+
+/**
+ * Where the two wooden targets stand for a mech lesson: one at 6 m (近身课）and
+ * one at 14 m（长钉的 12 米外射击课）, both in the direction the player faces,
+ * shifted sideways so they never overlap. Falls back to planLayout()'s spots if
+ * the arena is too cramped.
+ */
+function mechSpots(arena, layout) {
+  const fx = Math.cos(layout.aim);
+  const fz = Math.sin(layout.aim);
+  const ox = -fz;
+  const oz = fx;
+  const at = (dist, off) => ({
+    x: layout.home.x + fx * dist + ox * off,
+    z: layout.home.z + fz * dist + oz * off,
+    dist,
+  });
+  const trySpot = (dist, off) => {
+    for (let d = dist; d >= dist - 3; d -= 0.7) {
+      const sp = at(d, off);
+      const ok = !pointBlocked(arena, sp.x, sp.z, 0.9)
+        && hasLineOfSight(arena, layout.home.x, layout.home.z, sp.x, sp.z);
+      if (ok) return sp;
+    }
+    return null;
+  };
+  return [trySpot(6, -1.6) || layout.spots[0], trySpot(14, 1.6) || layout.spots[1]];
 }
 
 /**
@@ -214,6 +246,8 @@ const SHOOT_TARGETS = [
   { id: 'tgt3', name: '远靶', mech: 'sniper', color: '#a06bff', colorId: 'violet' },
 ];
 const SHOOT_BOT = { id: 'bot1', name: '实战靶机', mech: 'assault', color: '#ff8a3d', colorId: 'orange' };
+// 机体课程里那台「会还手」的陪练：前几步冻着当靶子，最后一步才醒。
+const MECH_SPAR = { id: 'bot1', name: '陪练机', mech: 'assault', color: '#ff8a3d', colorId: 'orange' };
 
 /** 射击篇：五步练到「打得中」。 */
 export const SHOOTING_STEPS = [
@@ -325,8 +359,10 @@ function planShooting(arena, layout) {
 }
 
 export class Tutorial {
-  constructor({ game, ui, audio, profile, mode = 'basic' }) {
+  constructor({ game, ui, audio, profile, mode = 'basic', mechId = null, level = null }) {
     this.mode = mode;
+    this.mechId = mechId || profile?.mech || 'assault';
+    this.level = level || 'tutorial';
     this.game = game;
     this.ui = ui;
     this.audio = audio;
@@ -348,8 +384,10 @@ export class Tutorial {
   }
 
   // --------------------------------------------------------------- lifecycle
-  start({ onFinish, onExit, mode = null } = {}) {
+  start({ onFinish, onExit, mode = null, mechId = null, level = null } = {}) {
     if (mode) this.mode = mode;
+    if (mechId) this.mechId = mechId;
+    if (level) this.level = level;
     this.onFinish = onFinish || null;
     this.onExit = onExit || null;
     this.active = true;
@@ -360,30 +398,49 @@ export class Tutorial {
     this.itemDropped = false;
     const advanced = this.mode === 'advanced';
     const shooting = this.mode === 'shooting';
-    this.steps = shooting ? SHOOTING_STEPS : advanced ? ADVANCED_STEPS : TUTORIAL_STEPS;
+    const mechMode = this.mode === 'mech';
+    const mechLevel = this.level === 'advanced' ? 'advanced' : 'tutorial';
+    this.mechId = this.mechId || this.profile?.mech || 'assault';
+    const lesson = MECH_LESSONS[this.mechId] || MECH_LESSONS.assault;
+    this.steps = mechMode
+      ? (mechLevel === 'advanced' ? lesson.advanced : lesson.tutorial)
+      : shooting ? SHOOTING_STEPS : advanced ? ADVANCED_STEPS : TUTORIAL_STEPS;
     this.watch = {
       moved: 0, kills: 0, dashes: 0, skills: 0, heatPeaked: false, cooled: false,
       dead: 0, itemsUsed: 0, maxHeat: 0, bounceHits: 0, dashDodges: 0,
       // 射击篇
       hits: 0, fixedKills: 0, moverHits: 0, farHits: 0, coolHits: 0, duelKills: 0,
+      // 机体课程
+      charges: 0, chargeHits: 0, chargeCombos: 0, chargeDashes: 0, closeHits: 0, coldKills: 0,
+      hooks: 0, hookHits: 0, hookWalls: 0, hookCombos: 0,
+      shields: 0, shieldBounces: 0, shieldCombos: 0,
+      mines: 0, mineHits: 0, minesLive: 0,
+      rails: 0, railHits: 0, far12Hits: 0,
+      fuseStarts: 0, fuseCancels: 0, fuseHits: 0, fuseBaits: 0, selfKills: 0,
+      stillAlive: true,
     };
+    this.combo = { charge: -1, hook: -1, shield: -1, chargeDash: -1, fuseBait: -1 };
+    this.lastKills = 0;
+    this.stepBase = null;
     this.bounceBase = 0;
     this.lastDashAt = -9;
     this.dashDodgeArmed = false;
-    this.rangeLabel = shooting ? '射击训练' : advanced ? '进阶训练' : '新手教程';
+    this.rangeLabel = mechMode ? lessonTitle(this.mechId, mechLevel)
+      : shooting ? '射击训练' : advanced ? '进阶训练' : '新手教程';
     this.targetHome = new Map();
 
     const arena = buildArena(ARENA_SIZE, ARENA_SEED);
-    const mechId = this.profile?.mech || 'assault';
     const meInfo = {
       id: YOU,
       name: this.profile?.name || '新兵',
       color: this.colorHex(this.profile?.colorId),
       colorId: this.profile?.colorId || 'cyan',
-      mech: mechId,
+      mech: mechMode ? this.mechId : (this.profile?.mech || 'assault'),
       team: 0,
     };
-    const foes = shooting ? [...SHOOT_TARGETS, SHOOT_BOT] : advanced ? ADV_BOTS : DUMMIES;
+    const foes = shooting ? [...SHOOT_TARGETS, SHOOT_BOT]
+      : mechMode ? (mechLevel === 'advanced' ? ADV_BOTS : [...DUMMIES, MECH_SPAR])
+        : advanced ? ADV_BOTS : DUMMIES;
     const infos = [
       meInfo,
       ...foes.map((d) => ({ ...d, team: 1, bot: true, difficulty: 'easy' })),
@@ -403,7 +460,7 @@ export class Tutorial {
     // Training bots must fight the trainee, not each other: two bots that pick
     // the closest target ended up duelling in a corner while the player was
     // never shot at ("AI 会闪避但不会射击").
-    sim.duelFocus = advanced || shooting;
+    sim.duelFocus = advanced || shooting || mechMode;
     this.sim = sim;
 
     this.dummyHome.clear();
@@ -438,6 +495,54 @@ export class Tutorial {
       place('tgt3', plan.far);
       const bot = place(SHOOT_BOT.id, plan.bot);
       if (bot) { bot.active = false; }
+    } else if (mechMode) {
+      // 机体课程：玩家站练习位，两台木头靶在正前方，陪练机在侧面——
+      // 专属教程里它一开始是冻住的，走到「实战」那一步才醒；
+      // 进阶玩法直接就是两台会还手的 AI。
+      const layout = planLayout(arena, sim);
+      this.layout = layout;
+      const me = sim.players.get(YOU);
+      me.x = layout.home.x;
+      me.z = layout.home.z;
+      me.aim = layout.aim;
+      me.facing = layout.aim;
+      me.vx = 0; me.vz = 0;
+      if (mechLevel === 'advanced') {
+        for (const d of ADV_BOTS) {
+          const p = sim.players.get(d.id);
+          if (!p) continue;
+          p.dummy = false;
+          p.x = layout.home.x + (d.id === 'bot1' ? -9 : 9);
+          p.z = layout.home.z - (d.id === 'bot1' ? 2 : 6);
+          p.aim = Math.atan2(me.z - p.z, me.x - p.x);
+        }
+      } else {
+        const spots = mechSpots(arena, layout);
+        DUMMIES.forEach((d, i) => {
+          const p = sim.players.get(d.id);
+          if (!p) return;
+          const spot = spots[i] || layout.spots[0];
+          p.dummy = true;
+          p.x = spot.x;
+          p.z = spot.z;
+          p.vx = 0; p.vz = 0;
+          p.aim = Math.atan2(me.z - p.z, me.x - p.x);
+          this.dummyHome.set(d.id, { x: p.x, z: p.z });
+          this.dummyAlive.set(d.id, true);
+        });
+        const spar = sim.players.get(MECH_SPAR.id);
+        if (spar) {
+          const a = layout.aim + Math.PI * 0.62;
+          spar.dummy = true;
+          spar.active = false;
+          spar.x = layout.home.x + Math.cos(a) * 9;
+          spar.z = layout.home.z + Math.sin(a) * 9;
+          spar.vx = 0; spar.vz = 0;
+          spar.aim = Math.atan2(me.z - spar.z, me.x - spar.x);
+          this.targetHome.set(MECH_SPAR.id, { x: spar.x, z: spar.z });
+          this.dummyAlive.set(MECH_SPAR.id, true);
+        }
+      }
     } else if (advanced) {
       // real bots: let the arena place them; the player gets the spot with a
       // cooling vent nearby so the "退回去降温" lesson is possible
@@ -555,6 +660,7 @@ export class Tutorial {
   keepDummies(sim) {
     if (this.mode === 'advanced') return;
     if (this.mode === 'shooting') return this.keepTargets(sim);
+    if (this.mode === 'mech') return this.keepMechTargets(sim);
     const me = sim.players.get(YOU);
     if (!me) return;
     for (const d of DUMMIES) {
@@ -636,24 +742,113 @@ export class Tutorial {
     }
   }
 
-  /** Count the hits the sim reports for us (before snapshot() drains the queue). */
+  /**
+   * 机体课程里的木头靶：站着不动、朝向玩家；陪练机在「实战」那一步之前冻着，
+   * 被打爆后回到原位（不回到场地角落）。
+   */
+  keepMechTargets(sim) {
+    if (this.level === 'advanced') return;
+    const me = sim.players.get(YOU);
+    if (!me) return;
+    for (const d of DUMMIES) {
+      const p = sim.players.get(d.id);
+      if (!p) continue;
+      const was = this.dummyAlive.get(d.id);
+      const home = this.dummyHome.get(d.id);
+      if (p.alive && was === false && home) {
+        p.x = home.x; p.z = home.z;
+        p.vx = 0; p.vz = 0;
+        p.respawnAt = 0;
+        p.heat = 0;
+      }
+      this.dummyAlive.set(d.id, p.alive);
+      if (p.alive) p.aim = Math.atan2(me.z - p.z, me.x - p.x);
+    }
+    const spar = sim.players.get(MECH_SPAR.id);
+    if (spar) {
+      if (spar.dummy) {
+        const home = this.targetHome.get(MECH_SPAR.id);
+        if (spar.alive && home) {
+          spar.x = home.x; spar.z = home.z;
+          spar.vx = 0; spar.vz = 0;
+          spar.aim = Math.atan2(me.z - spar.z, me.x - spar.x);
+        }
+      }
+    }
+  }
+
+  /** Count everything the sim reports for us (before snapshot() drains the queue). */
   tallyHits(sim) {
     const w = this.watch;
     if (!w || !sim) return;
-    for (const e of sim.fx) {
-      if (e.e !== 'heatHit' || e.attacker !== YOU) continue;
-      w.hits++;
-      const me = sim.players.get(YOU);
-      const d = me ? Math.hypot(e.x - me.x, e.z - me.z) : 0;
-      if (d >= 11) w.farHits++;
-      if (e.id === 'tgt2') w.moverHits++;
-      if (me && me.heat <= 60) w.coolHits++;
-    }
-    if (this.mode !== 'shooting') return;
     const me = sim.players.get(YOU);
-    if (me && me.heat > 75 && w.coolHits > 0) {
-      w.coolHits = 0;
-      this.ui?.toast?.('热量超过 75 · 点射连击断了，先停手降到 60 以下', 'err');
+    const t = sim.t;
+    for (const e of sim.fx) {
+      const mine = e.id === YOU;
+      // ---- 命中（按攻击者归属）
+      if (e.e === 'heatHit' && e.attacker === YOU) {
+        w.hits++;
+        const d = me ? Math.hypot(e.x - me.x, e.z - me.z) : 0;
+        if (d >= 11) w.farHits++;
+        if (d >= 12) w.far12Hits++;
+        if (d <= 8) w.closeHits++;
+        // 移动靶：射击篇里是脚本靶 tgt2；机体课程里看目标当时是不是在跑
+        if (e.id === 'tgt2') w.moverHits++;
+        else {
+          const q = sim.players.get(e.id);
+          if (q && Math.hypot(q.vx || 0, q.vz || 0) > 2.2) w.moverHits++;
+        }
+        if (me && me.heat <= 60) w.coolHits++;
+        if (e.source === 'rail') w.railHits++;
+        if (e.self) w.fuseHits++;
+        // 连招窗口：窗口内每一次命中都算（窗口到期自然失效，不会命中一次就关）
+        if (t <= this.combo.charge) w.chargeCombos++;
+        if (t <= this.combo.hook) w.hookCombos++;
+        if (t <= this.combo.shield) w.shieldCombos++;
+        if (t <= this.combo.fuseBait) w.fuseBaits++;
+        continue;
+      }
+      if (!mine) {
+        if (e.e === 'mineBoom' && e.owner === YOU) w.mineHits++;
+        continue;
+      }
+      // ---- 自己的技能 / 装备动作
+      switch (e.e) {
+        case 'assaultCharge': w.charges++; break;
+        case 'chargeHit': w.chargeHits++; this.combo.charge = t + 2; this.combo.chargeDash = t + 1.5; break;
+        case 'dash':
+          if (t <= this.combo.chargeDash) { w.chargeDashes++; this.combo.chargeDash = -1; }
+          break;
+        case 'hookHit': w.hookHits++; this.combo.hook = t + 3; break;
+        case 'grappleItem': w.hookWalls++; break;
+        // 钩爪勾到墙/钢板时自己会被拉过去：sim 发的是 hookMiss + 位移长度
+        case 'hookMiss': if (e.len > 0) w.hookWalls++; break;
+        case 'shieldUp': w.shields++; this.combo.shield = t + 2; break;
+        case 'shieldBounce': w.shieldBounces++; break;
+        case 'minePlace': w.mines++; break;
+        case 'sniperCharge': w.rails++; break;
+        case 'fuseStart': w.fuseStarts++; break;
+        case 'fuseCancel': w.fuseCancels++; this.combo.fuseBait = t + 3; break;
+        default: break;
+      }
+    }
+    // 热量峰值 / 地雷在场数量 / 存活状态
+    if (me) w.maxHeat = Math.max(w.maxHeat || 0, me.heat);
+    w.minesLive = sim.mines.filter((m) => m.owner === YOU && !m.dead && m.armedAt <= sim.t).length;
+    w.stillAlive = !!me?.alive;
+    w.selfKills = me?.stats?.selfDestructKills || 0;
+    // 低温击杀（击杀发生的那一帧读热量）
+    const kills = me?.stats?.kills || 0;
+    if (kills > (this.lastKills || 0)) {
+      if (me && me.heat < 40) w.coldKills += kills - (this.lastKills || 0);
+    }
+    this.lastKills = kills;
+
+    if (this.mode === 'shooting') {
+      if (me && me.heat > 75 && w.coolHits > 0) {
+        w.coolHits = 0;
+        this.ui?.toast?.('热量超过 75 · 点射连击断了，先停手降到 60 以下', 'err');
+      }
     }
   }
 
@@ -705,7 +900,7 @@ export class Tutorial {
     }
 
     const step = this.steps[this.stepIndex];
-    if (step && step.done(w)) {
+    if (step && step.done(w, this.stepBase || {})) {
       this.audio?.sfx?.('ui', { volume: 0.5 });
       this.goToStep(this.stepIndex + 1);
     }
@@ -732,18 +927,48 @@ export class Tutorial {
     if (index >= this.steps.length) {
       this.finished = true;
       this.heatBurst = null;
-      this.ui?.completeTutorial?.();
+      this.ui?.completeTutorial?.(this.mechFinishInfo());
       this.onFinish?.();
       return;
     }
     this.setStep(index);
   }
 
+  /** 结课卡：机体专训写清楚这台机体的打法，别再用新手教程那张「五个按键」。 */
+  mechFinishInfo() {
+    if (this.mode !== 'mech') return null;
+    const meta = LESSON_META[this.mechId] || {};
+    const advanced = this.level === 'advanced';
+    return {
+      title: `${lessonTitle(this.mechId, this.level)} 完成`,
+      sub: advanced
+        ? `${meta.tagline ? `${meta.tagline} · ` : ''}${meta.playstyle || ''} 去实战里用一次。`
+        : `${meta.tagline ? `${meta.tagline} · ` : ''}下一课去「进阶玩法」练这套连招。`,
+    };
+  }
+
   setStep(index) {
     this.stepIndex = index;
     const st = this.steps[index];
+    // snapshot of the counters, so a step can ask for "1 more kill from here"
+    this.stepBase = this.watch ? { ...this.watch } : null;
     this.ui?.showTutorial?.(this.steps, index, this.rangeLabel, this.mode);
     if (!st || !this.sim) return;
+    // steps that own a heat swing (点射控温 / 靠散热打消耗) start counting fresh
+    if (st.id === 'heat' || st.id === 'cool') {
+      this.watch.coolHits = 0;
+      this.watch.heatPeaked = false;
+      this.watch.cooled = false;
+    }
+    // 机体课程：需要对面开枪的步骤（盾反）和最后的实战步都把陪练机叫醒，
+    // 醒了就一直醒着——它是一台会还手的 AI，不是木头靶。
+    if (this.mode === 'mech' && this.level !== 'advanced' && (st.fire || st.id === 'duel')) {
+      const spar = this.sim.players.get(MECH_SPAR.id);
+      if (spar && spar.dummy) {
+        spar.dummy = false;
+        spar.heat = Math.min(spar.heat, 15);
+      }
+    }
     if (st.id === 'heat') this.armHeatBurst();
     // 点射控温 counts a fresh streak inside its own step
     if (st.id === 'control' && this.watch) this.watch.coolHits = 0;

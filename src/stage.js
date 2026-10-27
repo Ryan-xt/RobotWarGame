@@ -148,6 +148,19 @@ export class Stage {
 
   render(dt) {
     if (!this.scene || !this.camera) return;
+    // Shadow maps are re-rendered from scratch every frame by default — on the
+    // big map that is hundreds of casters drawn a second time for a shadow
+    // nobody can tell is one frame old. Refreshing them every other frame
+    // (every third on 'med') halves that cost with no visible difference in a
+    // top-down view.
+    this.frame = (this.frame || 0) + 1;
+    if (this.renderer.shadowMap.enabled) {
+      const every = this.quality === 'high' ? 2 : 3;
+      this.renderer.shadowMap.autoUpdate = false;
+      this.renderer.shadowMap.needsUpdate = this.frame % every === 0;
+    } else {
+      this.renderer.shadowMap.autoUpdate = true;
+    }
     if (this.bloomEnabled) {
       this.composer.render(dt);
     } else {
