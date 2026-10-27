@@ -1,0 +1,37 @@
+{
+  "name": "wasteland-overload",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "废土过载 - 2-8人废土机甲竞技场乱斗 (LAN/online prototype)",
+  "scripts": {
+    "build": "node scripts/build.js",
+    "prestart": "node scripts/build.js",
+    "start": "node server/index.js",
+    "dev": "node scripts/build.js && node server/index.js",
+    "sim": "node scripts/simtest.js",
+    "nettest": "node scripts/nettest.js",
+    "botmotion": "node scripts/botmotion.js",
+    "smoke": "node scripts/uismoke.js && node scripts/gamesmoke.js && node scripts/stage2dtest.js && node scripts/audiotest.js",
+    "e2e": "node scripts/e2e.js",
+    "audio": "node scripts/audiotest.js",
+    "perf": "node scripts/perftest.js",
+    "tutorialtest": "node scripts/tutorialtest.js",
+    "bulletmotion": "node scripts/bulletmotion.js",
+    "balance": "node scripts/balancetest.js",
+    "feel": "node scripts/feeltest.js",
+    "hit": "node scripts/hittest.js",
+    "training": "node scripts/trainingtest.js",
+    "shooting": "node scripts/shootingtest.js",
+    "mechlessons": "node scripts/mechlessonstest.js",
+    "aimtest": "node scripts/aimtest.js"
+  },
+  "dependencies": {
+    "three": "0.186.1",
+    "ws": "8.22.0"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "linkedom": "^0.18.14"
+  }
+}

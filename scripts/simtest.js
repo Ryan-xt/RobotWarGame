@@ -1,0 +1,216 @@
+// Headless balance/invariant test: runs complete bot matches across all arena
+// sizes and every mech skill, then checks the authoritative sim's guarantees.
+import { buildArena, resolvePlayerArena, arenaSummary, pointBlocked } from '../shared/arena.js';
+import { MECH_IDS, PLAYER_RADIUS } from '../shared/constants.js';
+import { MatchSim } from '../server/sim.js';
+
+let failures = 0;
+const ok = (cond, label, extra = '') => {
+  if (!cond) { failures++; console.log('  ✗', label, extra); }
+  else console.log('  ✓', label);
+};
+
+// ------------------------------------------------------------------ arenas
+console.log('\n[arena] deterministic layouts');
+for (const size of [20, 30, 40, 48]) {
+  for (const seed of [1, 99999]) {
+    const a = buildArena(size, seed);
+    const b = buildArena(size, seed);
+    ok(JSON.stringify(a) === JSON.stringify(b), `${size}m seed ${seed} deterministic`);
+    ok(a.spawns.length === 8, `${size}m has 8 spawns`);
+    ok(a.walls.length >= 6, `${size}m walls built (${a.walls.length})`);
+    ok(a.walls.every((w) => w.alive && w.maxHp > 0), `${size}m walls start intact`);
+    ok(a.plates.length > 0 && a.coolers.length > 0 && a.towers.length > 0 && a.acids.length > 0,
+      `${size}m props present (plates ${a.plates.length}, coolers ${a.coolers.length}, towers ${a.towers.length}, acids ${a.acids.length})`);
+    const inside = (p) => Math.abs(p.x) <= a.half && Math.abs(p.z) <= a.half;
+    for (const sp of a.spawns) ok(inside(sp), `${size}m spawn ${sp.x},${sp.z} inside arena`);
+    const sum = arenaSummary(a);
+    ok(sum.walls.length === a.walls.length && sum.size === size, `${size}m summary complete`);
+    // player pushed into a wall must be resolved back out
+    const wall = a.walls.find((w) => w.alive && !w.x && !w.z) || a.walls[0];
+    const p = { x: wall.x, z: wall.z, vx: 0, vz: 0 };
+    resolvePlayerArena({ ...a, dynamicPlates: [] }, p, 0.6);
+    const overlapsWall = Math.abs(p.x - wall.x) < wall.w * 0.5 && Math.abs(p.z - wall.z) < wall.h * 0.5;
+    ok(!overlapsWall, `${size}m wall collision pushes players out`);
+  }
+}
+
+// ------------------------------------------------------------------ matches
+console.log('\n[match] 8 bots, full length, ffa + team');
+function runMatch({ size, seed, mode, duration, eventRate = 'high', heatRate = 'fast', difficulty = 'normal', bots = 8 }) {
+  const arena = buildArena(size, seed);
+  const players = Array.from({ length: bots }, (_, i) => ({
+    id: 'p' + (i + 1), name: 'BOT' + (i + 1), color: '#fff', mech: MECH_IDS[i % MECH_IDS.length],
+    team: mode === 'ffa' ? i : i % 2, bot: true, difficulty,
+  }));
+  const sim = new MatchSim({ arena, players, settings: { mode, duration, eventRate, heatRate, difficulty }, seed });
+  const seen = { fx: new Set(), events: new Set(), maxHeat: 0, shortCircuit: 0, respawns: 0, wallBreaks: 0, wallHits: 0, phases: new Set(), badSnap: 0, finite: true };
+  let ticks = 0;
+  while (sim.phase !== 'over' && ticks < 60 * (duration + 20)) {
+    sim.step(1 / 60);
+    ticks++;
+    if (ticks % 20 !== 0) continue;
+    const snap = sim.snapshot();
+    seen.phases.add(snap.phase);
+    for (const p of snap.players) {
+      if (p.heat > seen.maxHeat) seen.maxHeat = p.heat;
+      for (const k of ['x', 'z', 'heat', 'ammo']) {
+        if (!Number.isFinite(p[k])) { seen.finite = false; seen.badSnap++; }
+      }
+      if (Math.abs(p.x) > arena.half + 0.01 || Math.abs(p.z) > arena.half + 0.01) seen.badSnap++;
+    }
+    if (snap.walls.length !== arena.walls.length) seen.badSnap++;
+    for (const e of snap.fx) {
+      seen.fx.add(e.e);
+      if (e.e === 'shortCircuit') seen.shortCircuit++;
+      if (e.e === 'respawn') seen.respawns++;
+      if (e.e === 'wallBreak') seen.wallBreaks++;
+      if (e.e === 'wallHit') seen.wallHits++;
+      if (e.e === 'eventBanner') seen.events.add(e.type);
+    }
+    // snapshot must be JSON safe (the network path)
+    try { JSON.parse(JSON.stringify(snap)); } catch { seen.badSnap++; }
+  }
+  return { sim, arena, seen, ticks };
+}
+
+const ffa = runMatch({ size: 30, seed: 4242, mode: 'ffa', duration: 90 });
+const s = ffa.seen;
+console.log(`  ticks ${ffa.ticks} · heat peak ${s.maxHeat.toFixed(0)} · short circuits ${s.shortCircuit} · respawns ${s.respawns}`);
+console.log(`  wall hits ${s.wallHits} breaks ${s.wallBreaks} · events ${[...s.events].join(',') || 'none'}`);
+ok(ffa.sim.phase === 'over', 'match reaches the over phase');
+ok(!!ffa.sim.result, 'match produces a result');
+ok(s.badSnap === 0, 'snapshots stay finite, in-bounds and JSON safe', String(s.badSnap));
+ok(s.maxHeat >= 60, 'heat builds up under bot fire', s.maxHeat.toFixed(1));
+ok(s.shortCircuit > 0, 'at least one short circuit happens', String(s.shortCircuit));
+ok(s.respawns > 0, 'eliminated mechs respawn', String(s.respawns));
+ok(s.wallBreaks > 0, 'destructible walls get destroyed', String(s.wallBreaks));
+ok(s.events.size >= 2, 'random events fire (sandstorm/claw/airdrop...)', [...s.events].join(','));
+ok(ffa.sim.result.board.length === 8, 'result board lists every player');
+const scores = ffa.sim.result.board.map((p) => p.score);
+ok(scores.every((v, i) => i === 0 || scores[i - 1] >= v), 'board sorted by score', scores.join(','));
+ok(typeof ffa.sim.result.awards === 'object', 'awards computed');
+ok(ffa.sim.result.board.every((p) => typeof p.title === 'string' && p.title.length >= 3), 'every pilot gets a fun title', ffa.sim.result.board.map((p) => p.title).join(' / '));
+ok(new Set(ffa.sim.result.board.map((p) => p.title)).size >= 4, 'titles vary across the board');
+ok(ffa.sim.result.duration >= 60, 'duration recorded', String(ffa.sim.result.duration.toFixed(1)));
+ok(ffa.sim.snapshot().phase === 'over', 'post-match snapshot stays available');
+
+console.log('\n[map] 48m 巨构废都 · 8 bots');
+const giant = runMatch({ size: 48, seed: 5150, mode: 'ffa', duration: 75, eventRate: 'med', heatRate: 'standard' });
+ok(giant.sim.phase === 'over', 'giant map match completes');
+ok(giant.seen.badSnap === 0, 'giant map snapshots valid', String(giant.seen.badSnap));
+ok(giant.arena.spawns.every((sp) => !pointBlocked(giant.arena, sp.x, sp.z, 0.8)), 'giant map spawns are clear');
+ok(giant.arena.coolers.length >= 8 && giant.arena.acids.length >= 2, 'giant map has vents and acid', `${giant.arena.coolers.length} vents`);
+const giantSnap = giant.sim.snapshot();
+ok(giantSnap.players.every((p) => Math.abs(p.x) <= 24 && Math.abs(p.z) <= 24), 'giant map keeps everyone inside');
+
+console.log('\n[team] 4v4');
+const team = runMatch({ size: 40, seed: 77, mode: '4v4', duration: 75, eventRate: 'med', heatRate: 'standard' });
+ok(team.sim.phase === 'over', 'team match ends');
+ok(Object.keys(team.sim.result.teams).length === 2, 'two team scores', JSON.stringify(team.sim.result.teams));
+ok(team.seen.badSnap === 0, 'team snapshots valid', String(team.seen.badSnap));
+
+// ------------------------------------------------------------------ mechs
+console.log('\n[mechs] every skill fires without errors');
+for (const mech of MECH_IDS) {
+  const arena = buildArena(20, 1234);
+  const players = [
+    { id: 'p1', name: 'T', color: '#fff', mech, team: 0, bot: false },
+    { id: 'p2', name: 'D', color: '#fff', mech: 'guardian', team: 1, bot: false },
+  ];
+  const sim = new MatchSim({ arena, players, settings: { mode: 'ffa', duration: 60, eventRate: 'low', heatRate: 'standard', difficulty: 'normal' }, seed: 1234 });
+  let skillCasts = 0, dashes = 0, items = 0;
+  for (let i = 0; i < 60 * 30 && sim.phase !== 'over'; i++) {
+    const doSkill = i % 90 === 20;
+    const doDash = i % 47 === 0;
+    const doItem = i % 130 === 40;
+    if (doSkill) skillCasts++;
+    if (doDash) dashes++;
+    if (doItem) items++;
+    sim.applyInput('p1', {
+      mx: Math.sin(i / 30), mz: Math.cos(i / 41), aim: (i / 60) % 6.28,
+      fire: i % 40 < 20, dash: doDash, skill: doSkill, useItem: doItem, seq: i,
+    });
+    sim.applyInput('p2', {
+      mx: Math.cos(i / 25), mz: Math.sin(i / 37), aim: Math.PI + Math.sin(i / 20),
+      fire: i % 33 < 16, dash: i % 61 === 0, skill: i % 100 === 30, useItem: i % 210 === 60, seq: i,
+    });
+    sim.step(1 / 60);
+    if (i % 120 === 0) sim.snapshot();
+  }
+  const p1 = sim.players.get('p1');
+  const snap = sim.snapshot();
+  ok(snap.players.length === 2 && skillCasts > 10 && dashes > 10 && items > 5,
+    `${mech} ran ${skillCasts} skills / ${dashes} dashes / ${items} items · heat ${p1.heat.toFixed(0)} · alive ${p1.alive}`);
+  if (sim.phase === 'over') sim.endMatch();
+}
+
+// sudden death pressure
+console.log('\n[storm] last 30 seconds');
+const late = runMatch({ size: 20, seed: 5, mode: 'ffa', duration: 65, eventRate: 'low', heatRate: 'fast', bots: 4 });
+ok(late.sim.phase === 'over', 'short match completes');
+const stormSnaps = late.seen.phases.has('live');
+ok(stormSnaps, 'match passes through the live phase');
+
+// ---------------------------------------------------------------- collision
+// 48 m 地图墙最密：两块碰撞体夹缝比机甲还窄时，解析器以前会把机甲塞进墙里
+// 半米（玩家看到的「穿墙 / 站在墙里」）。
+console.log('\n[walls] dense map never wedges the mech');
+for (const size of [20, 30, 40, 48]) {
+  const arena = buildArena(size, 20251026);
+  const walkers = [{ id: 'w1', name: 'W', color: '#fff', colorId: 'orange', mech: 'assault', team: 0 }];
+  const sim = new MatchSim({ arena, players: walkers, settings: { mode: 'ffa', duration: 900, eventRate: 'low', heatRate: 'slow', difficulty: 'easy' }, seed: 1 });
+  sim.phase = 'live';
+  const p = sim.players.get('w1');
+  const depth = () => {
+    let worst = 0;
+    for (const w of arena.walls) {
+      if (!w.alive) continue;
+      const dx = Math.max(Math.abs(p.x - w.x) - w.w / 2, 0);
+      const dz = Math.max(Math.abs(p.z - w.z) - w.h / 2, 0);
+      const d = Math.hypot(dx, dz);
+      if (d < PLAYER_RADIUS) worst = Math.max(worst, PLAYER_RADIUS - d);
+    }
+    return worst;
+  };
+  let worst = 0;
+  for (let k = 0; k < 24; k++) {
+    const a = (k / 24) * Math.PI * 2;
+    p.x = 0; p.z = 0; p.alive = true; p.heat = 0; p.iframeUntil = 1e9;
+    for (let i = 0; i < 60 * 4; i++) {
+      p.input = { mx: Math.cos(a), mz: Math.sin(a), aim: a, fire: false, seq: 1 };
+      if (i % 30 === 0) p.pendingDash = true;
+      p.dashCdUntil = 0;
+      sim.step(1 / 60);
+      worst = Math.max(worst, depth());
+      if (!p.alive) { p.alive = true; p.x = 0; p.z = 0; }
+    }
+  }
+  ok(worst < 0.05, `${size} m map: mech never sinks into a wall`, `max ${worst.toFixed(3)} m`);
+}
+
+// ---------------------------------------------------------------- facing
+// 机甲的身体永远转向准星，而不是移动方向（否则一边走一边打，看起来像没跟鼠标）。
+console.log('\n[facing] body follows the aim, not the walk direction');
+{
+  const arena = buildArena(20, 777);
+  const people = [
+    { id: 'a', name: 'A', color: '#5ad8ff', colorId: 'cyan', mech: 'assault', team: 0 },
+    { id: 'b', name: 'B', color: '#ff5b4a', colorId: 'red', mech: 'assault', team: 1 },
+  ];
+  const sim = new MatchSim({ arena, players: people, settings: { mode: 'ffa', duration: 900, eventRate: 'low', heatRate: 'slow', difficulty: 'easy' }, seed: 1 });
+  sim.phase = 'live';
+  const a = sim.players.get('a');
+  a.x = 0; a.z = 0; a.facing = Math.PI; a.aim = 0;
+  for (let i = 0; i < 40; i++) {
+    // walking straight down (+z) while aiming at +x
+    sim.applyInput('a', { mx: 0, mz: 1, aim: 0, fire: false, seq: i });
+    sim.step(1 / 60);
+  }
+  const facingErr = Math.abs(Math.atan2(Math.sin(a.facing - 0), Math.cos(a.facing - 0)));
+  ok(facingErr < 0.2, 'strafing: the mech still faces the crosshair', `${(facingErr * 57.3).toFixed(0)}°`);
+  ok(Math.abs(a.z) > 0.5, 'and it really was moving', `z=${a.z.toFixed(2)}`);
+}
+
+console.log(failures === 0 ? '\nSIM TEST OK' : `\nSIM TEST FAILED (${failures})`);
+process.exit(failures === 0 ? 0 : 1);
