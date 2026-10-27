@@ -106,6 +106,30 @@ for (const fx of [
 }
 ok(true, 'storm/leak/marker/airdrop/plate overlays render without throwing');
 
+// the new 48 × 48 giant map must draw in the 2D fallback too
+{
+  const giant = buildArena(48, 20251026);
+  const sim3 = new MatchSim({
+    arena: giant, players: infos, seed: 20251026,
+    settings: { ...settings, mapSize: 48 },
+  });
+  game.start({
+    type: 'start', roomCode: 'GIANT2D', arena: JSON.parse(JSON.stringify(giant)),
+    settings: { ...settings, mapSize: 48 }, seed: 20251026, duration: 90, you: 'p1',
+    players: infos, matchCount: 1,
+  });
+  const before = draws;
+  for (let i = 0; i < 60 * 4; i++) {
+    sim3.applyInput('p1', { mx: 1, mz: 0, aim: 0.4, fire: true, seq: i });
+    sim3.step(1 / 60);
+    if (i % 3 === 0) game.onSnapshot(JSON.parse(JSON.stringify(sim3.snapshot())), 'p1');
+    stage.render(1 / 60);
+    game.update(1 / 60);
+  }
+  ok(draws - before > 60 * 3, 'the 48m giant map renders in 2D', `${draws - before} frames`);
+  ok(document.getElementById('minimap-size').textContent === '48m', 'HUD labels the giant map');
+}
+
 game.disposeWorld();
 view = 'menu';
 for (let i = 0; i < 5; i++) stage.render(1 / 60);

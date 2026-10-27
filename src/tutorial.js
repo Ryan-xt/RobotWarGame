@@ -415,11 +415,12 @@ export class Tutorial {
       if (!hb.topped) me.heat = Math.max(me.heat, 72);
       return;
     }
-    if (hb.shots >= 7 || sim.t < hb.next) return;
+    if (hb.shots >= 9 || sim.t < hb.next) return;
     const shooter = [...sim.players.values()].find((p) => p.dummy && p.alive);
     if (!shooter) return;
     shooter.aim = Math.atan2(me.z - shooter.z, me.x - shooter.x);
-    sim.fireBullet(shooter, false, { speed: 14 });
+    // slightly hotter than a live bolt so the lesson lands in a few seconds
+    sim.fireBullet(shooter, false, { speed: 14, heat: 11 });
     hb.shots++;
     hb.next = sim.t + 0.45;
   }

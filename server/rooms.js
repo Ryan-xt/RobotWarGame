@@ -144,7 +144,7 @@ export class Room {
     if (['low', 'med', 'high'].includes(settings.eventRate)) s.eventRate = settings.eventRate;
     if (['slow', 'standard', 'fast'].includes(settings.heatRate)) s.heatRate = settings.heatRate;
     if (['easy', 'normal', 'hard'].includes(settings.difficulty)) s.difficulty = settings.difficulty;
-    if (['auto', 20, 30, 40].includes(settings.mapSize)) s.mapSize = settings.mapSize;
+    if (['auto', 20, 30, 40, 48].includes(settings.mapSize)) s.mapSize = settings.mapSize;
     if (settings.friendlyFire != null) s.friendlyFire = !!settings.friendlyFire;
     if (settings.duration != null) s.duration = Math.max(60, Math.min(300, settings.duration | 0));
     // trim bots if the new mode / headcount can't hold them
@@ -181,7 +181,8 @@ export class Room {
     const humanCount = members.filter((m) => !m.bot).length;
     if (humanCount === 0) throw new Error('房间没有真人玩家');
     const headcount = members.length;
-    const autoSize = headcount <= 2 ? 20 : headcount <= 4 ? 30 : 40;
+    // auto: 2 players duels, 3-4 mid, 5-6 the full arena, 7-8 the giant map
+    const autoSize = headcount <= 2 ? 20 : headcount <= 4 ? 30 : headcount <= 6 ? 40 : 48;
     const size = this.settings.mapSize === 'auto' ? autoSize : this.settings.mapSize;
     this.seed = (Math.random() * 1e9) | 0;
     this.arena = buildArena(size, this.seed);

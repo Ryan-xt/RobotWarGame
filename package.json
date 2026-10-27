@@ -17,7 +17,8 @@
     "audio": "node scripts/audiotest.js",
     "perf": "node scripts/perftest.js",
     "tutorialtest": "node scripts/tutorialtest.js",
-    "bulletmotion": "node scripts/bulletmotion.js"
+    "bulletmotion": "node scripts/bulletmotion.js",
+    "balance": "node scripts/balancetest.js"
   },
   "dependencies": {
     "three": "0.186.1",

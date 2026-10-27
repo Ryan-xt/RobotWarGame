@@ -13,9 +13,12 @@ export const BULLET = {
   chargedSpeed: 27,
   radius: 0.17,
   life: 2.4,
-  heat: 12,
-  chargedHeat: 20,
-  bouncedBonus: 0.25, // bounced hits +25% heat at baseline, adjusted by arena scaling
+  // Heat per hit is what kills: the GDD budget is "a duel lasts long enough to
+  // feel the heat rise". 8 per bolt = ~12 clean hits before a short circuit, so
+  // a single burst no longer ends a mech and cover/venting actually matter.
+  heat: 8,
+  chargedHeat: 14,
+  bouncedBonus: 0.18, // bounced hits +18% heat at baseline, adjusted by arena scaling
   magSize: 8,
   fireInterval: 1 / 3,
   reloadTime: 1.25,
@@ -32,16 +35,16 @@ export const DASH = {
 
 export const HEAT = {
   max: 100,
-  decay: 2,
-  decayDelay: 3,
-  coolerRate: 15,
-  acidRate: 8,
+  decay: 2.6,
+  decayDelay: 2.5,
+  coolerRate: 18,
+  acidRate: 6,
   acidSlow: 0.2,
-  towerHeat: 15,
+  towerHeat: 11,
   towerRadius: 2.75,
   towerInterval: 4.2,
   towerCharge: 1.15,
-  explosionHeat: 30,
+  explosionHeat: 24,
   explosionRadius: 3,
   respawnTime: 10,
   spawnInvuln: 2,

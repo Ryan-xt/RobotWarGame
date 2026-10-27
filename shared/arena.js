@@ -61,6 +61,41 @@ const LAYOUTS = {
     ],
     single: [],
   },
+  // 48 × 48 巨构废都 — the biggest arena: ruined blocks in the four corners,
+  // acid trenches on the flanks, twin EM towers and a broken ring of pillars
+  // around the central platform. Same mirror symmetry as the smaller maps.
+  48: {
+    quad: [
+      { type: 'plate', x: 0.21, z: 0.09, r: 1.4 },
+      { type: 'plate', x: 0.10, z: 0.32, r: 1.4 },
+      { type: 'plate', x: 0.31, z: 0.14, r: 1.3 },
+      { type: 'wall', x: 0.29, z: 0.22, w: 4.4, h: 0.85 },
+      { type: 'wall', x: 0.37, z: 0.31, w: 0.85, h: 3.4 },
+      { type: 'wall', x: 0.19, z: 0.36, w: 2.8, h: 0.85 },
+      { type: 'wall', x: 0.33, z: 0.37, w: 2.2, h: 0.85 },
+      { type: 'cooler', x: 0.40, z: 0.40, r: 2.45 },
+      { type: 'cooler', x: 0.155, z: 0.175, r: 2.05 },
+    ],
+    pairX: [
+      { type: 'acid', x: 0.44, z: 0.02, r: 2.9 },
+      { type: 'acid', x: 0.31, z: 0.045, r: 2.1 },
+    ],
+    pairZ: [
+      { type: 'tower', x: 0.045, z: 0.355, r: 1.0 },
+      { type: 'tower', x: 0.415, z: 0.315, r: 1.0 },
+    ],
+    // absolute (scaled) centre pieces: a broken pillar ring around the platform
+    single: [
+      { type: 'wall', x: 0.092, z: 0.0, w: 0.9, h: 2.4 },
+      { type: 'wall', x: -0.092, z: 0.0, w: 0.9, h: 2.4 },
+      { type: 'wall', x: 0.0, z: 0.092, w: 2.4, h: 0.9 },
+      { type: 'wall', x: 0.0, z: -0.092, w: 2.4, h: 0.9 },
+      { type: 'plate', x: 0.062, z: 0.062, r: 1.3 },
+      { type: 'plate', x: -0.062, z: 0.062, r: 1.3 },
+      { type: 'plate', x: 0.062, z: -0.062, r: 1.3 },
+      { type: 'plate', x: -0.062, z: -0.062, r: 1.3 },
+    ],
+  },
 };
 
 function scaleType(entry, size) {
@@ -75,7 +110,7 @@ export function buildArena(size, seed) {
   const arena = {
     size, half, seed,
     walls: [], plates: [], towers: [], coolers: [], acids: [], spawns: [], pads: [], props: [],
-    platform: { x: 0, z: 0, r: size >= 30 ? 4.4 : 3.8 },
+    platform: { x: 0, z: 0, r: size >= 48 ? 5.4 : size >= 30 ? 4.4 : 3.8 },
   };
 
   let id = 0;
@@ -113,6 +148,10 @@ export function buildArena(size, seed) {
     arena.coolers.push({ id: id++, x: 0, z: 0.28 * size, r: 2.0 });
     arena.coolers.push({ id: id++, x: 0, z: -0.28 * size, r: 2.0 });
   }
+  if (size >= 48) {
+    arena.coolers.push({ id: id++, x: 0.28 * size, z: 0, r: 2.0 });
+    arena.coolers.push({ id: id++, x: -0.28 * size, z: 0, r: 2.0 });
+  }
 
   // High-value item pads + center purge spawn.
   arena.pads.push({ id: 'pad-center', x: 0, z: 0, center: true });
@@ -125,6 +164,13 @@ export function buildArena(size, seed) {
     for (let i = 0; i < 4; i++) {
       const a = i * Math.PI / 2;
       arena.pads.push({ id: 'pado-' + i, x: Math.cos(a) * size * 0.44, z: Math.sin(a) * size * 0.44 });
+    }
+  }
+  if (size >= 48) {
+    // the giant map needs a longer supply line: 4 more pads on the diagonals
+    for (let i = 0; i < 4; i++) {
+      const a = Math.PI / 4 + i * Math.PI / 2;
+      arena.pads.push({ id: 'padg-' + i, x: Math.cos(a) * size * 0.41, z: Math.sin(a) * size * 0.41 });
     }
   }
   // Drop pads that landed inside an obstacle.

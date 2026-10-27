@@ -3,7 +3,7 @@ import {
   clamp, lerp, makeRng, dist, angleDiff, normAngle, EVENT_META,
 } from '../shared/index.js';
 import { mechOf } from '../shared/mechs.js';
-import { resolvePlayerArena, rayArena, hasLineOfSight } from '../shared/arena.js';
+import { resolvePlayerArena, rayArena, hasLineOfSight, pointBlocked } from '../shared/arena.js';
 import { stepMotion, speedFactorForHeat } from '../shared/motion.js';
 import { updateBot } from './bots.js';
 
@@ -19,6 +19,13 @@ export function emptyStats() {
     topHeatSurvival: 0, coolerTime: 0, clawHits: 0, explosionHits: 0,
     selfDestructKills: 0, damageDealt: 0, shots: 0, hits: 0, longestLife: 0,
   };
+}
+
+function arenaHazard(arena, x, z) {
+  if (arena.acids.some((a) => Math.hypot(a.x - x, a.z - z) < a.r + 0.6)) return true;
+  if (arena.coolers.some((c) => Math.hypot(c.x - x, c.z - z) < c.r + 0.4)) return true;
+  if (arena.towers.some((t) => Math.hypot(t.x - x, t.z - z) < t.r + 1.2)) return true;
+  return false;
 }
 
 export function createPlayer(info, index) {
@@ -57,6 +64,9 @@ export class MatchSim {
     this.arena.dynamicPlates = [];
     this.settings = settings;
     this.rng = makeRng(seed);
+    // Items roll on their own stream: adding supply drops must never reshuffle
+    // the event / bot randomness of an otherwise identical match.
+    this.itemRng = makeRng((seed ^ 0x9e3779b9) >>> 0);
     this.seed = seed;
     this.t = 0;
     this.tick = 0;
@@ -81,7 +91,8 @@ export class MatchSim {
     this.fx = [];
     this.fxAll = [];
     this.nextEventAt = 16 + this.rng() * 6;
-    this.nextItemAt = 5;
+    this.nextItemAt = 2.2;
+    this.lastItemSpawnAt = 0;
     this.itemSerial = 0;
     // Practice/tutorial sims respawn instantly instead of making the player
     // watch a 10 s timer (the server never sets this flag).
@@ -99,8 +110,8 @@ export class MatchSim {
       heatMult: n <= 2 ? 1.25 : n <= 4 ? 1.0 : 0.83,
       bounceBonus: n <= 2 ? 0.25 : n <= 4 ? 0.20 : 0.15,
       eventBase: n <= 2 ? 36 : n <= 4 ? 27 : 21,
-      itemMax: n <= 2 ? 2 : n <= 4 ? 4 : 7,
-      pickupInterval: n <= 2 ? 14 : n <= 4 ? 11 : 9,
+      itemMax: n <= 2 ? 4 : n <= 4 ? 6 : 9,
+      pickupInterval: n <= 2 ? 9 : n <= 4 ? 7 : 6,
     };
     if (settings.heatRate === 'slow') this.scaling.heatMult *= 0.8;
     if (settings.heatRate === 'fast') this.scaling.heatMult *= 1.2;
@@ -789,25 +800,50 @@ export class MatchSim {
         }
       }
     }
-    if (this.t >= this.nextItemAt) {
+    // Regular supply drops, plus a safety net: if the floor has been picked
+    // clean for a few seconds, drop one more instead of letting the arena go dry.
+    const empty = this.items.length === 0 && this.t - this.lastItemSpawnAt > 4 && this.t > 6;
+    if (this.t >= this.nextItemAt || empty) {
       this.spawnRandomItem();
       this.nextItemAt = this.t + this.scaling.pickupInterval * (0.8 + this.rng() * 0.5);
     }
   }
 
-  spawnRandomItem(forceType = null, pad = null) {
-    const alive = [...this.players.values()].filter((p) => p.alive).length;
-    if (this.items.length >= this.scaling.itemMax + 1) return;
-    const pads = this.arena.pads;
+  /** Item spawn points: the fixed pads plus spots a few metres from players. */
+  itemSpots() {
+    const spots = this.arena.pads.filter((pd) => !this.items.some((it) => dist(it.x, it.z, pd.x, pd.z) < 1.4));
+    const alive = [...this.players.values()].filter((p) => p.alive);
+    for (const p of alive) {
+      // two candidate spots beside each player so drops are actually seen
+      for (let i = 0; i < 2; i++) {
+        const a = this.itemRng() * Math.PI * 2;
+        const r = 2.4 + this.itemRng() * 1.6;
+        const x = p.x + Math.cos(a) * r;
+        const z = p.z + Math.sin(a) * r;
+        if (Math.abs(x) > this.arena.half - 1.4 || Math.abs(z) > this.arena.half - 1.4) continue;
+        if (pointBlocked(this.arena, x, z, 0.7)) continue;
+        if (arenaHazard(this.arena, x, z)) continue;
+        if (this.items.some((it) => dist(it.x, it.z, x, z) < 1.8)) continue;
+        if (spots.some((sp) => dist(sp.x, sp.z, x, z) < 1.8)) continue;
+        spots.push({ x, z, near: p.id });
+      }
+    }
+    return spots;
+  }
+
+  spawnRandomItem(forceType = null, pad = null, opts = {}) {
+    // airdrops are scripted events: they land even when the floor is already full
+    if (!opts.ignoreCap && this.items.length >= this.scaling.itemMax) return;
     let spot = pad;
     if (!spot) {
-      const open = pads.filter((pd) => !this.items.some((it) => dist(it.x, it.z, pd.x, pd.z) < 1.4));
-      spot = open.length ? open[Math.floor(this.rng() * open.length)] : null;
+      const open = this.itemSpots();
+      spot = open.length ? open[Math.floor(this.itemRng() * open.length)] : null;
     }
     if (!spot) return;
+    this.lastItemSpawnAt = this.t;
     let type = forceType;
     if (!type) {
-      const roll = this.rng();
+      const roll = this.itemRng();
       if (spot.center) type = roll < 0.33 ? 'purge' : roll < 0.66 ? 'overclock' : 'coolant';
       else if (roll < 0.3) type = 'coolant';
       else if (roll < 0.48) type = 'grenade';
@@ -1034,7 +1070,7 @@ export class MatchSim {
           const angle = (i / count) * Math.PI * 2;
           const pad = { x: ad.x + Math.cos(angle) * 2.1, z: ad.z + Math.sin(angle) * 2.1, center: true };
           const type = i === 0 ? (this.rng() < 0.5 ? 'purge' : 'overclock') : 'coolant';
-          this.spawnRandomItem(type, pad);
+          this.spawnRandomItem(type, pad, { ignoreCap: true });
         }
       }
     }

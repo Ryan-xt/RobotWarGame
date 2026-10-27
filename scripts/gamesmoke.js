@@ -121,6 +121,32 @@ checks['results shown'] = !document.getElementById('screen-results').classList.c
 game.disposeWorld();
 checks['world disposed'] = game.scene === null;
 
+// ---------------------------------------------------------------- giant map
+const giantArena = buildArena(48, 20251026);
+const giantInfos = Array.from({ length: 8 }, (_, i) => ({
+  id: 'g' + (i + 1), name: '巨构' + (i + 1), color: '#fff', colorId: 'cyan',
+  mech: ['assault', 'grappler', 'guardian', 'miner', 'sniper', 'furnace', 'assault', 'guardian'][i], team: i,
+}));
+const giantSettings = { mode: 'ffa', duration: 60, bots: 8, eventRate: 'med', heatRate: 'standard', difficulty: 'normal', mapSize: 48 };
+const giantSim = new MatchSim({ arena: giantArena, players: giantInfos, settings: giantSettings, seed: 20251026 });
+game.start({
+  type: 'start', roomCode: 'GIANT', arena: JSON.parse(JSON.stringify(giantArena)), settings: giantSettings,
+  seed: 20251026, duration: 60, you: 'g1', players: giantInfos, matchCount: 1,
+});
+let giantSnaps = 0;
+for (let i = 0; i < 60 * 20 && giantSim.phase !== 'over'; i++) {
+  giantSim.step(1 / 60);
+  if (i % 3 === 0) {
+    game.onSnapshot(JSON.parse(JSON.stringify(giantSim.snapshot())), 'g1');
+    giantSnaps++;
+  }
+  if (i % 6 === 0) game.update(1 / 60);
+}
+checks['48m giant map builds and renders'] = giantSnaps > 300 && game.scene !== null && document.getElementById('minimap-size').textContent === '48m';
+checks['giant map keeps the player inside'] = Math.abs(game.selfVisual?.x || 0) <= 24.5 && Math.abs(game.selfVisual?.z || 0) <= 24.5;
+if (giantSim.phase !== 'over') giantSim.endMatch();
+game.disposeWorld();
+
 // ---------------------------------------------------------------- long ffa
 const arena2 = buildArena(40, 999);
 const infos2 = Array.from({ length: 8 }, (_, i) => ({

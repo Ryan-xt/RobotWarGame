@@ -1,6 +1,6 @@
 // Headless balance/invariant test: runs complete bot matches across all arena
 // sizes and every mech skill, then checks the authoritative sim's guarantees.
-import { buildArena, resolvePlayerArena, arenaSummary } from '../shared/arena.js';
+import { buildArena, resolvePlayerArena, arenaSummary, pointBlocked } from '../shared/arena.js';
 import { MECH_IDS } from '../shared/constants.js';
 import { MatchSim } from '../server/sim.js';
 
@@ -12,7 +12,7 @@ const ok = (cond, label, extra = '') => {
 
 // ------------------------------------------------------------------ arenas
 console.log('\n[arena] deterministic layouts');
-for (const size of [20, 30, 40]) {
+for (const size of [20, 30, 40, 48]) {
   for (const seed of [1, 99999]) {
     const a = buildArena(size, seed);
     const b = buildArena(size, seed);
@@ -94,6 +94,15 @@ ok(ffa.sim.result.board.every((p) => typeof p.title === 'string' && p.title.leng
 ok(new Set(ffa.sim.result.board.map((p) => p.title)).size >= 4, 'titles vary across the board');
 ok(ffa.sim.result.duration >= 60, 'duration recorded', String(ffa.sim.result.duration.toFixed(1)));
 ok(ffa.sim.snapshot().phase === 'over', 'post-match snapshot stays available');
+
+console.log('\n[map] 48m 巨构废都 · 8 bots');
+const giant = runMatch({ size: 48, seed: 5150, mode: 'ffa', duration: 75, eventRate: 'med', heatRate: 'standard' });
+ok(giant.sim.phase === 'over', 'giant map match completes');
+ok(giant.seen.badSnap === 0, 'giant map snapshots valid', String(giant.seen.badSnap));
+ok(giant.arena.spawns.every((sp) => !pointBlocked(giant.arena, sp.x, sp.z, 0.8)), 'giant map spawns are clear');
+ok(giant.arena.coolers.length >= 8 && giant.arena.acids.length >= 2, 'giant map has vents and acid', `${giant.arena.coolers.length} vents`);
+const giantSnap = giant.sim.snapshot();
+ok(giantSnap.players.every((p) => Math.abs(p.x) <= 24 && Math.abs(p.z) <= 24), 'giant map keeps everyone inside');
 
 console.log('\n[team] 4v4');
 const team = runMatch({ size: 40, seed: 77, mode: '4v4', duration: 75, eventRate: 'med', heatRate: 'standard' });
