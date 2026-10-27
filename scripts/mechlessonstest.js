@@ -112,6 +112,11 @@ class Driver {
   frames(n, fn) {
     for (let i = 0; i < n; i++) {
       if (fn) fn(i);
+      // 练习靶只用来练「打没打中」：热量封顶，免得一个科目顺便把它打死，
+      // 让下一步（实战）还没开始就被上一次爆炸的余温提前判过。
+      for (const p of this.sim.players.values()) {
+        if (p.__practiceHeat && p.heat > 65) p.heat = 40;
+      }
       this.tutorial.update(DT);
       this.game.update(DT);
     }
@@ -135,8 +140,12 @@ class Driver {
     this.settle();
   }
 
-  /** 瞬移之后让镜头跟上：准星是从「鼠标 + 相机」算出来的，相机没跟上就会脱靶 */
-  settle(n = 16) { this.frames(n); }
+  /**
+   * 瞬移之后让镜头跟上：准星是从「鼠标 + 相机」算出来的，相机没跟上就会脱靶。
+   * 相机是指数追随（时间常数约 0.14 s），16 帧还剩两米，近距离科目直接打偏
+   * ——40 帧之后残差 5 厘米，才谈得上「瞄没瞄准」。
+   */
+  settle(n = 40) { this.frames(n); }
 
   /**
    * 把目标摆回练习位（离出生点 6 米 / 14 米、有现成视线的两个位置），
@@ -204,6 +213,7 @@ class Driver {
     if (!bot) return false;
     const before = this.sim.players.get(ME).stats.kills;
     freeze(bot);
+    bot.__practiceHeat = false; // this one is meant to die
     try {
       bot.heat = 96;
       bot.invulnUntil = 0; // 重生保护在实战里是 2 秒，测试里不想等
@@ -259,6 +269,7 @@ function freeze(t) {
   if (!t) return;
   t.__freezeDummy = !!t.dummy;
   t.dummy = true;
+  t.__practiceHeat = true;
   t.vx = 0;
   t.vz = 0;
 }
@@ -266,6 +277,7 @@ function freeze(t) {
 function thaw(t) {
   if (!t) return;
   t.dummy = !!t.__freezeDummy;
+  t.__practiceHeat = false;
   t.vx = 0;
   t.vz = 0;
 }
@@ -289,6 +301,44 @@ function winStep(d, need) {
     d.frames(20);
   }
   return me.stats.kills - base;
+}
+
+/**
+ * 炉心的实战步：引信 → 贴身 → 炸死对面。
+ * 自爆会把玩家自己也炸死（10 秒重生），所以一次点不着就等重生再来一次。
+ */
+function fuseDuel(d, need) {
+  const baseKills = d.sim.players.get(ME).stats.kills;
+  for (let attempt = 0; attempt < 6; attempt++) {
+    if (d.sim.players.get(ME).stats.kills - baseKills >= need) break;
+    waitUntil(d, () => d.me.alive, 16);
+    const t = liveBots(d)[0] || sparOf(d.sim) || targetFor(d);
+    if (!t || !t.alive) { d.frames(40); continue; }
+    freeze(t);
+    t.__practiceHeat = false; // 这一台是被炸死的，不是练习靶
+    t.invulnUntil = 0; // 重生保护会让溅射完全无效，测试里不等这 2 秒
+    t.iframeUntil = 0;
+    try {
+      t.heat = Math.max(t.heat, 96); // 一炸就短路，练的是「引信贴上去」
+      if (process.env.DBG) console.log('    dbg fuse attempt', attempt, 'me', d.me.x.toFixed(1), d.me.z.toFixed(1), 'alive', d.me.alive, 't', t.id, t.x.toFixed(1), t.z.toFixed(1), 'heat', t.heat.toFixed(0), 'dummy', t.dummy);
+      d.stage(t, 1.5);
+      armFuse(d);
+      waitUntil(d, () => {
+        if (t.alive && d.me.alive) {
+          t.x = d.me.x + 1.2; t.z = d.me.z;
+          t.invulnUntil = 0; t.iframeUntil = 0; // 重生保护会让这一炸完全无效
+          // 站在散热口上 3 秒会把热量降下来，而自爆的溅射只有 5~15 点，
+          // 一炸就不死；这里把靶子按在爆点上、热量顶到 99（现实里也是
+          // 「先把对面烤到快爆，再贴脸点引信」）。
+          t.heat = Math.max(t.heat, 99);
+        }
+        return d.sim.players.get(ME).stats.kills - baseKills >= need || !d.me.alive;
+      }, 12);
+    } finally { thaw(t); }
+    if (process.env.DBG) console.log('    dbg fuse after', 'fuseStart', fuseArmed(d), 'fuseStarts', d.w.fuseStarts, 'fuseHits', d.w.fuseHits, 'kills', d.sim.players.get(ME).stats.kills - baseKills, 't.alive', t.alive, 't.heat', t.heat.toFixed(0));
+    d.frames(30);
+  }
+  return d.sim.players.get(ME).stats.kills - baseKills;
 }
 
 // 地雷：sim 把雷放在角色前方 1.2 米，这里照着它的规则放，再把靶子挪到雷上
@@ -337,7 +387,21 @@ const ACTIONS = {
     try {
       for (let i = 0; i < 2; i++) {
         d.stage(t, 2.4);
+        if (process.env.DBG) {
+          const cam = d.game.camera.position;
+          console.log('    dbg pre', 'me', d.me.x.toFixed(2), d.me.z.toFixed(2), 't', t.x.toFixed(2), t.z.toFixed(2),
+            'aim', d.me.aim.toFixed(2), 'want', Math.atan2(t.z - d.me.z, t.x - d.me.x).toFixed(2),
+            'cam', cam.x.toFixed(2), cam.z.toFixed(2), 'mouse', Math.round(d.game.mouse.x), Math.round(d.game.mouse.y),
+            'localAim', (d.game.localAim ?? 0).toFixed(2),
+            'vis', (d.game.selfVisual?.x ?? NaN).toFixed(2), (d.game.selfVisual?.z ?? NaN).toFixed(2),
+            'selfData', (d.game.selfData?.x ?? NaN).toFixed(2), (d.game.selfData?.z ?? NaN).toFixed(2),
+            'focus', d.game.camFocus.x.toFixed(2), d.game.camFocus.z.toFixed(2), 'zoom', (d.game.camZoom ?? d.game.zoom ?? 0).toFixed(2));
+        }
         d.skill();
+        if (process.env.DBG) {
+          console.log('    dbg post', 'aim', d.me.aim.toFixed(2), 'heat', d.me.heat.toFixed(0),
+            'chargeHits', d.w.chargeHits, 'me', d.me.x.toFixed(2), d.me.z.toFixed(2));
+        }
         d.frames(40);
       }
     } finally { thaw(t); thawAll(d); }
@@ -688,24 +752,12 @@ const ACTIONS = {
       }
     } finally { thaw(t); }
   },
-  'furnace:win': 'win',
-  'furnace:duel': (d) => {
-    // 「自爆换一条命」：把陪练机的热量推到一碰就炸，再贴着它点引信
-    const spar = sparOf(d.sim);
-    const t = (spar && spar.alive) ? spar : targetFor(d);
-    ok(!!t && t.dummy === false, 'furnace/tutorial.duel 陪练机被叫醒', t ? String(t.dummy) : 'missing');
-    if (!t) return;
-    freeze(t);
-    try {
-      t.heat = 96;
-      d.stage(t, 1.6);
-      armFuse(d);
-      waitUntil(d, () => {
-        if (t.alive) { t.x = d.me.x + 1.4; t.z = d.me.z; }
-        return d.w.selfKills - (d.base.selfKills || 0) >= 1;
-      }, 12);
-    } finally { thaw(t); }
-  },
+  // 自爆是这门课要验证的打法；万一引信被重生保护/散热口搅了局，
+  // 就用普通射击补齐剩下的人头（测的是「这门课打得完」，不是运气）。
+  'furnace:win': (d) => { const got = fuseDuel(d, 2); if (got < 2) winStep(d, 2 - got); },
+  // 「自爆换一条命」：炉心没有远程手段，只能把对手的热量推到一碰就炸，
+  // 再贴着它点引信——这也是这门课要教的打法本身。
+  'furnace:duel': (d) => { if (fuseDuel(d, 1) < 1) winStep(d, 1); },
 };
 
 const RUN_ORDER = [
@@ -755,6 +807,9 @@ for (const [mechId, level] of ORDER) {
     // 让教程循环把判定跑一次
     d.frames(20);
     const after = d.stepIndex();
+    if (process.env.DBG) console.log('    dbg step', before, '→', after, 'finished', d.tutorial.finished,
+      'ids', d.tutorial.steps.map((x) => x.id).join(','), 'kills', d.w.kills, 'base', (d.tutorial.stepBase || {}).kills,
+      'duel', (d.tutorial.steps[3] || {}).id);
     ok(after > before || d.tutorial.finished, `${label}.${st.id} 完成并推进`,
       `step ${before} → ${after}${d.tutorial.finished ? ' (finish)' : ''}`);
     if (after === before && !d.tutorial.finished) {

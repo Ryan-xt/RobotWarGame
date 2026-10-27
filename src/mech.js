@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { mechOf } from '../shared/mechs.js';
 import { glowTexture, hazardTexture, nameTexture } from './textures.js';
-import { batchStatic } from './batch.js';
+import { batchStatic, limitShadowCasters } from './batch.js';
 
 const GEO = {
   box: new THREE.BoxGeometry(1, 1, 1),
@@ -222,11 +222,16 @@ export function createMech(mechId, playerColor, playerName = '', opts = {}) {
     color, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending,
     depthWrite: false, side: THREE.DoubleSide,
   });
+  // Three triangles pointing along +x. The last vertex used to be written as
+  // `0.58, 0,` — 25 numbers instead of 27 — which made every chevron's bounding
+  // sphere NaN. A NaN sphere never intersects the camera frustum, so the one
+  // cue that says "this mech is looking that way" was silently culled on every
+  // frame since the facing work landed.
   const chevronGeo = new THREE.BufferGeometry();
   chevronGeo.setAttribute('position', new THREE.Float32BufferAttribute([
     1.12, 0, 0, 0.42, 0, 0.46, 0.58, 0, 0,
-    0.42, 0, 0.46, 0.42, 0, -0.46, 0.58, 0,
-    0.42, 0, -0.46, 1.12, 0, 0, 0.58, 0,
+    0.42, 0, 0.46, 0.42, 0, -0.46, 0.58, 0, 0,
+    0.42, 0, -0.46, 1.12, 0, 0, 0.58, 0, 0,
   ], 3));
   chevronGeo.computeVertexNormals();
   const chevron = new THREE.Mesh(chevronGeo, facingMat);
@@ -322,6 +327,11 @@ export function createMech(mechId, playerColor, playerName = '', opts = {}) {
     if (v && v.isObject3D) v.userData.noBatch = true;
   }
   batchStatic(group);
+  // A mech is ~36 meshes after the hull merge, and every one of them used to be
+  // drawn again into the shadow map — with 8 players that was 290 of the ~380
+  // shadow draws in the whole scene. Only the five largest parts are needed to
+  // read as a mech shadow.
+  limitShadowCasters(group, { maxCount: 5 });
   return parts;
 }
 

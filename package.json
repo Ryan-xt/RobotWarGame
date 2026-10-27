@@ -23,7 +23,8 @@
     "hit": "node scripts/hittest.js",
     "training": "node scripts/trainingtest.js",
     "shooting": "node scripts/shootingtest.js",
-    "mechlessons": "node scripts/mechlessonstest.js"
+    "mechlessons": "node scripts/mechlessonstest.js",
+    "aimtest": "node scripts/aimtest.js"
   },
   "dependencies": {
     "three": "0.186.1",

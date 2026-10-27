@@ -3,7 +3,7 @@ import {
   groundTexture, metalTexture, hazardTexture, glowTexture, iconTexture, signTexture,
   scorchTexture, smokeTexture, noiseTexture,
 } from './textures.js';
-import { batchStatic, batchWorld } from './batch.js';
+import { batchStatic, batchWorld, limitShadowCasters } from './batch.js';
 
 function mat(opts) { return new THREE.MeshStandardMaterial(opts); }
 
@@ -58,7 +58,15 @@ export class ArenaView {
     // thing to drop when the player needs frames back.
     const baseline = new Set(this.group.children);
     this.buildProps();
-    this.decor = this.group.children.filter((c) => !baseline.has(c));
+    // The props live in their own sub-tree so they can still be switched off
+    // as a whole on the low preset — and so they can be world-merged on their
+    // own without folding them into the always-visible arena geometry.
+    const decorRoot = new THREE.Group();
+    decorRoot.name = 'decor-root';
+    for (const c of this.group.children.filter((x) => !baseline.has(x))) decorRoot.add(c);
+    this.group.add(decorRoot);
+    this.decorRoot = decorRoot;
+    this.decor = [decorRoot];
     this.buildBoundary();
     this.buildDust();
     this.buildLightPool();
@@ -78,7 +86,30 @@ export class ArenaView {
       ...(this.decor || []),
       this.dust,
     ].filter(Boolean);
-    this.batchWorldStats = batchWorld(this.group, { exclude: animated });
+    // 20 cm rivets do not need to be in the shadow map. This runs *before* the
+    // merge so that a chunk of small props does not inherit a caster flag.
+    this.shadowStats = limitShadowCasters(this.group, {
+      minRadius: 0.45,
+      keep: [
+        ...this.coolers.map((c) => c.g),
+        ...[...this.wallMeshes.values()].map((w) => w.group),
+      ],
+    });
+    // Props are static too, so they are merged inside their own tree first
+    // (transparent decals included — their uv transforms are baked in, which is
+    // what lets 48 separately-cloned hazard-stripe materials collapse into one).
+    this.decorStats = batchWorld(decorRoot, { transparent: true });
+    // `transparent: true` folds the additive glow decals (hazard stripes, plate
+    // rims, floodlight cones) into the same merges: each of them used to be its
+    // own draw call with its own cloned material.
+    //
+    // No per-cell subdivision: it was measured on the 48 m map and it *lost*.
+    // A cell that holds a single visible crate still gets drawn, so the colour
+    // pass went 218 → 249 submissions while the mesh count only dropped from
+    // 593 to 493. One mesh per material wins because the whole arena is on
+    // screen in a top-down camera anyway.
+    this.batchWorldStats = batchWorld(this.group, { exclude: animated, transparent: true });
+
   }
 
   // ------------------------------------------------------------- lights

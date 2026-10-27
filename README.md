@@ -7,11 +7,46 @@
 
 ---
 
-## 快速开始
+## 把游戏下到本地（不用命令行的方式）
+
+需要先装 **Node.js 18 或更新**：<https://nodejs.org/> → 下载 **LTS** 版本 → 一路「下一步」。
+装完不用重启电脑，但**要把这个黑窗口全关掉再重开**。
+
+**方式 A：下载压缩包（最简单）**
+
+1. 打开仓库页面 → 绿色 **Code** 按钮 → **Download ZIP**；
+2. 解压到一个**没有中文、没有空格**的路径，例如 `D:\RobotWarGame`；
+3. Windows 双击 `start.bat`，macOS / Linux 双击（或在终端执行）`start.sh`；
+4. 第一次会自动装依赖，然后浏览器自己打开 `http://localhost:3000`；
+5. 关掉那个命令行窗口 = 关掉服务器。下次玩还是双击同一个文件。
+
+**方式 B：会用 git 的话**
+
+```bash
+git clone https://github.com/Ryan-xt/RobotWarGame.git
+cd RobotWarGame
+npm install
+npm run dev
+```
+
+**方式 C：局域网和朋友一起玩（不用外网）**
+
+房主按上面跑起来，终端会打印 `局域网: http://192.168.x.x:3000`，
+把这个地址发给同一 Wi-Fi 下的朋友，他们直接打开就能进；房主点「创建房间」开始，
+朋友点「加入房间」填房间码。防火墙需要放行 3000 端口。
+
+> 打不开 `localhost:3000`？看命令行窗口里有没有报错；端口被占用可以 `PORT=8080 npm run dev`
+> （Windows：`set PORT=8080 && npm run dev`）。
+
+---
+
+## 快速开始（开发者）
 
 ```bash
 npm install
-npm run dev          # 构建 public/app.js 并启动服务器
+npm run dev          # 构建 public/app.js 并启动服务器（开发时改完前端要重新跑）
+npm run build        # 只构建 public/app.js
+npm start            # 生产：构建 + 启动（不监听文件变化）
 ```
 
 打开 <http://localhost:3000>。

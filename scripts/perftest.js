@@ -112,12 +112,34 @@ ok(report['drawMinimap (ms)'] < 1.2, 'minimap redraw stays under 1.2 ms (cached 
 const { sceneCost } = await import('../src/batch.js');
 const cost = sceneCost(game.scene);
 console.log('scene:', cost);
-ok(cost.meshes <= 950, '8 players / 48 m: meshes stayed under 950', `${cost.meshes}`);
+ok(cost.meshes <= 700, '8 players / 48 m: meshes stayed under 700', `${cost.meshes}`);
 let casters = 0;
 game.scene.traverse((o) => { if (o.isMesh && o.castShadow) casters++; });
-ok(casters <= 420, 'shadow casters are bounded', `${casters}`);
+ok(casters <= 200, 'shadow casters are bounded', `${casters}`);
 ok(cost.lights <= 14, 'lights are a fixed budget', `${cost.lights}`);
-ok(cost.triangles < 90000, 'triangle count is sane', `${cost.triangles}`);
+ok(cost.triangles < 90000 && cost.triangles > 30000, 'triangle count is sane', `${cost.triangles}`);
+
+// What the renderer actually has to submit per frame: everything that survives
+// the camera frustum, plus the shadow pass (which redraws every caster, on
+// high quality every other frame). This is the number that decided smoothness
+// on the integrated GPUs players showed up with — not the triangle count.
+game.applyQuality('high', 1);
+game.updateCamera(1 / 60);
+const { drawBudget } = await import('../src/batch.js');
+const budget = drawBudget(game.scene, game.camera, { shadowEvery: 2 });
+console.log('draw budget:', budget);
+ok(budget.colors <= 240, 'colour pass submits at most 240 draws', `${budget.colors}`);
+ok(budget.shadows <= 180, 'shadow pass is capped at 180 casters', `${budget.shadows}`);
+ok(budget.total <= 280, 'total draw submissions stay under 280/frame', `${budget.total}`);
+// A NaN bounding sphere is never inside the frustum, so the object silently
+// disappears for good — this is how the facing chevron got lost.
+let nanGeo = 0;
+game.scene.traverse((o) => {
+  if (!o.isMesh || !o.geometry?.attributes?.position) return;
+  if (!o.geometry.boundingSphere) o.geometry.computeBoundingSphere();
+  if (!Number.isFinite(o.geometry.boundingSphere?.radius)) nanGeo++;
+});
+ok(nanGeo === 0, 'every mesh has a finite bounding sphere', `${nanGeo} broken`);
 
 // ------------------------------------------------------------------ adaptive ladder
 // Helper: feed the FPS counter a steady rate (update() recomputes FPS from

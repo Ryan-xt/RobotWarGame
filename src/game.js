@@ -19,7 +19,56 @@ const lerpAngle = (a, b, k) => a + angleDiff(b, a) * k;
 // producing megabytes of garbage per match (and periodic GC hitches).
 const _ndc = new THREE.Vector2();
 const _ray = new THREE.Raycaster();
-const _aimPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -1.0);
+// y = 0 — the same plane the mechs walk on. It used to be y = 1 (torso height),
+// which made the cursor ray land a little short of the floor point under the
+// crosshair: a constant few-degree error, worst at the edges of the screen.
+/**
+ * Every bolt used to build its own sphere/box geometry, its own core material
+ * and two new additive materials — five GPU objects per shot, twenty-ish
+ * hundred a minute in a busy 8-player match, all identical. That is garbage
+ * the collector has to walk during play, which shows up as a hitch, not a
+ * steady frame time. They are now shared, with one material per colour.
+ */
+const _bulletAssets = (() => {
+  let cache = null;
+  return () => {
+    if (cache) return cache;
+    const coreMat = new THREE.MeshBasicMaterial({ color: '#ffffff' });
+    const glowMats = new Map();
+    const trailMats = new Map();
+    const sprite = (c) => {
+      if (!glowMats.has(c)) {
+        glowMats.set(c, new THREE.SpriteMaterial({
+          map: glowTexture(), color: c, transparent: true, opacity: 0.9,
+          blending: THREE.AdditiveBlending, depthWrite: false,
+        }));
+      }
+      return glowMats.get(c);
+    };
+    const trail = (c) => {
+      if (!trailMats.has(c)) {
+        trailMats.set(c, new THREE.MeshBasicMaterial({
+          color: c, transparent: true, opacity: 0.8,
+          blending: THREE.AdditiveBlending, depthWrite: false,
+        }));
+      }
+      return trailMats.get(c);
+    };
+    cache = {
+      coreMat,
+      boltCore: new THREE.SphereGeometry(0.09, 8, 6),
+      railCore: new THREE.SphereGeometry(0.12, 8, 6),
+      boltTrail: new THREE.BoxGeometry(0.85, 0.045, 0.045),
+      railTrail: new THREE.BoxGeometry(2.4, 0.045, 0.045),
+      glowMat: sprite,
+      trailMat: trail,
+    };
+    return cache;
+  };
+})();
+const bulletAssets = _bulletAssets;
+
+const _aimPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
 const _aimHit = new THREE.Vector3();
 const easeOut = (t) => 1 - Math.pow(1 - t, 3);
 // Server dash velocity (sim.js): distance / duration * 1.02
@@ -304,14 +353,24 @@ export class Game {
 
   updateAim() {
     if (!this.camera) return;
-    // The aim point is where the cursor ray hits the floor *under the current
-    // camera*. Recomputing it only when the mouse moved was the bug behind
-    // "the mech does not follow my mouse": walking moves the camera, so the
-    // same screen position maps to a different world point every frame. The
-    // cache key therefore has to include the camera, or the facing freezes at
-    // whatever the world looked like on the last mouse event.
+    // The aim point is where the cursor ray hits the floor *under the camera of
+    // this frame*. Two rules keep the drawn aiming line on the crosshair:
+    //   1. the ray is cast after updateCamera() ran (a stale camera is a
+    //      constant angular error at the edges of the screen), and
+    //   2. the angle is measured from where the mech is actually drawn (v.x,
+    //      v.z — prediction plus the decaying correction), not from the raw
+    //      predicted point the model is not drawn at.
+    const v = this.selfVisual;
+    if (!v) return;
     const cam = this.camera.position;
-    const key = `${Math.round(this.mouse.x)}:${Math.round(this.mouse.y)}:${cam.x.toFixed(2)}:${cam.z.toFixed(2)}:${cam.y.toFixed(2)}`;
+    // The key must contain everything the answer depends on — including where
+    // the mech itself is drawn. Leaving the mech out meant that while walking
+    // the cached angle could survive a frame, and the line slipped off the
+    // crosshair by half a degree for that frame.
+    const key = `${Math.round(this.mouse.x)}:${Math.round(this.mouse.y)}:`
+      + `${cam.x.toFixed(2)}:${cam.y.toFixed(2)}:${cam.z.toFixed(2)}:`
+      + `${this.camFocus.x.toFixed(2)}:${this.camFocus.z.toFixed(2)}:`
+      + `${(v.x ?? 0).toFixed(2)}:${(v.z ?? 0).toFixed(2)}:${(v.aim ?? 0).toFixed(3)}`;
     if (this._aimKey === key) return;
     this._aimKey = key;
     _ndc.set(
@@ -320,12 +379,15 @@ export class Game {
     );
     _ray.setFromCamera(_ndc, this.camera);
     const got = _ray.ray.intersectPlane(_aimPlane, _aimHit);
-    const v = this.selfVisual;
-    if (!v) return;
     if (got) {
-      const sx = v.rx ?? v.predicted?.x ?? v.x;
-      const sz = v.rz ?? v.predicted?.z ?? v.z;
-      this.localAim = Math.atan2(_aimHit.z - sz, _aimHit.x - sx);
+      const sx = v.x ?? v.rx ?? v.predicted?.x;
+      const sz = v.z ?? v.rz ?? v.predicted?.z;
+      if (Number.isFinite(sx) && Number.isFinite(sz)) {
+        const dx = _aimHit.x - sx;
+        const dz = _aimHit.z - sz;
+        // dead centre: keep the last angle instead of spinning on a degenerate 0
+        if (dx * dx + dz * dz > 1e-4) this.localAim = Math.atan2(dz, dx);
+      }
     }
   }
 
@@ -885,21 +947,17 @@ export class Game {
   }
 
   makeBullet(b) {
+    const rail = b.type === 'rail';
     const g = new THREE.Group();
     const colour = this.bulletColor(b);
-    const core = new THREE.Mesh(
-      new THREE.SphereGeometry(b.type === 'rail' ? 0.12 : 0.09, 8, 6),
-      new THREE.MeshBasicMaterial({ color: '#ffffff' })
-    );
+    const assets = bulletAssets();
+    const core = new THREE.Mesh(rail ? assets.railCore : assets.boltCore, assets.coreMat);
     g.add(core);
-    const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTexture(), color: colour, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false }));
-    glow.scale.set(b.type === 'rail' ? 2.2 : 1.2, b.type === 'rail' ? 2.2 : 1.2, 1);
+    const glow = new THREE.Sprite(assets.glowMat(colour));
+    glow.scale.set(rail ? 2.2 : 1.2, rail ? 2.2 : 1.2, 1);
     g.add(glow);
-    const trail = new THREE.Mesh(
-      new THREE.BoxGeometry(b.type === 'rail' ? 2.4 : 0.85, 0.045, 0.045),
-      new THREE.MeshBasicMaterial({ color: colour, transparent: true, opacity: 0.8, blending: THREE.AdditiveBlending, depthWrite: false })
-    );
-    trail.position.x = -(b.type === 'rail' ? 1.2 : 0.44);
+    const trail = new THREE.Mesh(rail ? assets.railTrail : assets.boltTrail, assets.trailMat(colour));
+    trail.position.x = -(rail ? 1.2 : 0.44);
     g.add(trail);
     this.scene.add(g);
     const mesh = {
@@ -908,8 +966,8 @@ export class Game {
       setColor: (c) => {
         if (!c || mesh.colour === c) return;
         mesh.colour = c;
-        glow.material.color.set(c);
-        trail.material.color.set(c);
+        glow.material = assets.glowMat(c);
+        trail.material = assets.trailMat(c);
       },
     };
     // charged / rail bolts stay readable: keep a little extra size
@@ -920,10 +978,8 @@ export class Game {
   removeBullet(mesh) {
     if (!mesh) return;
     this.scene.remove(mesh.group);
-    mesh.group.traverse((o) => {
-      if (o.isMesh) { o.geometry?.dispose?.(); o.material?.dispose?.(); }
-      else if (o.isSprite) { o.material?.dispose?.(); }
-    });
+    // Geometry and materials are shared (see bulletAssets) — dropping them here
+    // would free an asset that the next shot is about to use.
     for (const [id, m] of this.bullets) if (m === mesh) this.bullets.delete(id);
   }
 
@@ -1426,9 +1482,14 @@ export class Game {
       }
     }
     this.advanceRemoteClock(Math.min(0.25, rawDt));
+    // Order matters for "the aim line and the mouse must be the same line":
+    // move the mech → place the camera → read the aim with *that* camera →
+    // send input → draw. Reading the aim before the camera moved left the
+    // crosshair and the aiming line up to ~4° apart at the edges of the screen.
+    if (this.running && !this.ended) this.predict(dt);
+    this.updateCamera(dt);
     this.updateAim();
     if (this.running && !this.ended) {
-      this.predict(dt);
       this.sendInputs(dt);
       this.updateLocalShot(dt);
     }
@@ -1441,7 +1502,6 @@ export class Game {
     this.updateZones(dt);
     this.updateMarkers(dt);
     this.updateAirdrop(dt);
-    this.updateCamera(dt);
     this.updateDamagedOverlay(dt);
     if (this.fx) this.fx.update(dt);
     if (this.arenaView) {
@@ -1451,14 +1511,13 @@ export class Game {
         this.arenaView.update(dt * ambEvery, this.time, this.snap, this.selfVisual);
       }
     }
-    // crosshair follows mouse & local charge (30 Hz, only when it changed)
+    // crosshair follows the mouse every frame (it *is* the cursor in game, so a
+    // 30 Hz throttle showed up as the crosshair trailing the aiming line)
     if (this.running) {
-      this.crossAt = (this.crossAt || 0) + dt;
       const charging = !!(this.mouse.down && this.localCharge > 0.05);
       const hot = (this.selfData?.heat || 0) >= 70;
       const sig = `${Math.round(this.mouse.x)},${Math.round(this.mouse.y)},${Math.round(this.localCharge * 12)},${charging},${hot}`;
-      if (this.crossAt >= 1 / 30 && sig !== this.crossSig) {
-        this.crossAt = 0;
+      if (sig !== this.crossSig) {
         this.crossSig = sig;
         this.ui.setCrosshair(this.mouse.x, this.mouse.y, {
           charging,
@@ -1731,8 +1790,11 @@ export class Game {
           this.scene.add(v.sniperLine);
         }
         const pts = v.sniperLine.geometry.attributes.position.array;
-        pts[0] = v.x; pts[1] = 1.1; pts[2] = v.z;
-        pts[3] = v.x + Math.cos(v.aim) * 22; pts[4] = 1.1; pts[5] = v.z + Math.sin(v.aim) * 22;
+        // ground level: a line floating 1.1 m up projected *above* the cursor,
+        // so the far end of the aim guide never sat on the crosshair
+        const ly = 0.1;
+        pts[0] = v.x; pts[1] = ly; pts[2] = v.z;
+        pts[3] = v.x + Math.cos(v.aim) * 22; pts[4] = ly; pts[5] = v.z + Math.sin(v.aim) * 22;
         v.sniperLine.geometry.attributes.position.needsUpdate = true;
         v.sniperLine.visible = true;
         v.sniperLine.material.opacity = 0.22 + Math.sin(this.time * 18) * 0.1;
@@ -1852,14 +1914,19 @@ export class Game {
     const sx = (Math.random() - 0.5) * sh * 1.1;
     const sz = (Math.random() - 0.5) * sh * 1.1;
     const sy = (Math.random() - 0.5) * sh * 0.6;
-    // slight aim lead, purely visual
-    const aimLead = 1.1;
-    const cx = this.camFocus.x + Math.cos(this.localAim) * aimLead * 0.25;
-    const cz = this.camFocus.z + Math.sin(this.localAim) * aimLead * 0.25;
+    // No "aim lead": shifting the camera with the aim made the ground point
+    // under a still cursor move, so the aiming line could never sit exactly on
+    // the crosshair (it settled a few degrees off). The camera now depends only
+    // on where the mech is, which is also what the player expects.
+    const cx = this.camFocus.x;
+    const cz = this.camFocus.z;
     this.camera.position.set(cx + sx, this.camOffset.height + sy, cz + this.camOffset.back + sz);
     this.camera.lookAt(cx, 0.9, cz - 0.6);
     this.camera.aspect = window.innerWidth / window.innerHeight;
     this.camera.updateProjectionMatrix();
+    // The crosshair ray is cast right after this, with this very camera: without
+    // an explicit update the ray used last frame's matrix (a frame of aim lag).
+    this.camera.updateMatrixWorld();
   }
 
   updateDamagedOverlay(dt) {
