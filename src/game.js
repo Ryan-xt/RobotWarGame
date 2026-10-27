@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { ArenaView } from './arenaView.js';
 import { Fx } from './fx.js';
-import { createMech, updateMech, disposeMech } from './mech.js';
+import { createMech, updateMech, disposeMech, muzzleWorld } from './mech.js';
 import { mechOf } from '../shared/mechs.js';
 import {
   ITEM_TYPES, PLAYER_COLORS, TEAM_COLORS, BULLET, PLAYER_RADIUS, DASH,
@@ -56,6 +56,12 @@ export class Game {
     this.degraded = false;
     this.lastMinimap = 0;
     this.localShotAt = -1;
+    this.localFireNextAt = 0;
+    this.predAmmo = null;
+    this.ghosts = [];
+    this.threat = null;
+    this.threatArc = null;
+    this.sendNow = false;
     this.time = 0;
     this.bindInputs();
   }
@@ -89,6 +95,10 @@ export class Game {
     this.localVel = { x: 0, z: 0 };
     this.localCharge = 0;
     this.localFireHeld = 0;
+    this.localFireNextAt = 0;
+    this.predAmmo = null;
+    this.ghosts = [];
+    this.threat = null;
     this.inputHistory = [];
     this.localDash = { until: 0, dx: 0, dz: 0 };
     this.visOff = { x: 0, z: 0 };
@@ -197,12 +207,20 @@ export class Game {
       }
     }
     if (this.bullets) for (const b of this.bullets.values()) this.removeBullet(b);
+    if (this.ghosts) { for (const g of this.ghosts) this.removeBullet(g); this.ghosts.length = 0; }
     if (this.items) for (const it of this.items.values()) this.sceneRemoveGroup(it.group);
     if (this.mines) for (const m of this.mines.values()) this.sceneRemoveGroup(m.group);
     if (this.grenades) for (const g of this.grenades.values()) this.sceneRemoveGroup(g.group);
     if (this.zones) for (const z of this.zones.values()) this.sceneRemoveGroup(z.group);
     if (this.markers) for (const m of this.markers.values()) this.sceneRemoveGroup(m.group);
     if (this.airdropMesh) { this.sceneRemoveGroup(this.airdropMesh.group); this.airdropMesh = null; }
+    if (this.threatArc) {
+      this.scene.remove(this.threatArc);
+      this.threatArc.geometry?.dispose?.();
+      this.threatArc.material?.dispose?.();
+      this.threatArc = null;
+      this.threat = null;
+    }
     if (this.fx) this.fx.dispose();
     if (this.arenaView) this.arenaView.dispose();
     this.fx = null;
@@ -239,9 +257,13 @@ export class Game {
       const tag = e.target && e.target.tagName;
       if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
       const k = e.key.toLowerCase();
-      if (['w', 'a', 's', 'd'].includes(k)) { this.keys.add(k); }
-      if (e.code === 'Space') { e.preventDefault(); if (!e.repeat) this.pending.dash = true; }
-      if (k === 'e') { if (!e.repeat) this.pending.item = true; }
+      if (['w', 'a', 's', 'd'].includes(k)) {
+        if (!this.keys.has(k)) this.sendNow = true;
+        this.keys.add(k);
+      }
+      if (e.code === 'Space') { e.preventDefault(); if (!e.repeat) { this.pending.dash = true; this.sendNow = true; } }
+      if (k === 'e') { if (!e.repeat) { this.pending.item = true; this.sendNow = true; } }
+      if (k === 'h') { this.mouse.down = false; this.ui?.openModal?.('modal-help'); }
       if (e.code === 'Tab') {
         e.preventDefault();
         this.ui.toggleScoreboard(true);
@@ -255,10 +277,15 @@ export class Game {
     this.onMouseMove = (e) => { this.mouse.x = e.clientX; this.mouse.y = e.clientY; };
     this.onMouseDown = (e) => {
       if (!this.running || this.ended) return;
-      if (e.button === 0) this.mouse.down = true;
-      if (e.button === 2) { this.pending.skill = true; }
+      // clicks on HUD buttons / modals must not also pull the trigger
+      const t = e.target;
+      if (t && t.closest && t.closest('button, .modal, input, select, textarea')) return;
+      // fire immediately: waiting for the next 30 Hz input tick added up to
+      // 33 ms of dead trigger travel on top of the network round trip
+      if (e.button === 0) { this.mouse.down = true; this.sendNow = true; }
+      if (e.button === 2) { this.pending.skill = true; this.sendNow = true; }
     };
-    this.onMouseUp = (e) => { if (e.button === 0) this.mouse.down = false; };
+    this.onMouseUp = (e) => { if (e.button === 0) { this.mouse.down = false; this.sendNow = true; } };
     this.onContext = (e) => { if (this.running) e.preventDefault(); };
     this.onBlur = () => { this.keys.clear(); this.mouse.down = false; };
     window.addEventListener('keydown', this.onKeyDown);
@@ -304,8 +331,9 @@ export class Game {
     const self = this.selfData;
     const canAct = self && self.alive && this.snap && this.snap.phase === 'live';
     if (!canAct) { mx = 0; mz = 0; }
-    if (this.sendAcc >= 1 / 30) {
+    if (this.sendAcc >= 1 / 30 || this.sendNow) {
       this.sendAcc = 0;
+      this.sendNow = false;
       // Predict the dash locally so the server's 2.8 m burst does not arrive
       // as a surprise correction (that was one source of the "yank back").
       // The cooldown read from the snapshot is already a few ms old, so age it
@@ -807,8 +835,11 @@ export class Game {
         mesh = this.makeBullet(b);
         this.bullets.set(b.id, mesh);
         mesh.x = b.x; mesh.z = b.z;
+        // our own shot came back from the server: retire the predicted tracer
+        if (b.owner === this.myId && this.ghosts.length) this.handOffGhost();
       }
       mesh.seenAt = performance.now();
+      mesh.owner = b.owner;
       mesh.vx = b.vx; mesh.vz = b.vz;
       mesh.type = b.type;
       mesh.charged = b.charged;
@@ -847,7 +878,7 @@ export class Game {
     this.scene.add(g);
     return {
       group: g, x: b.x, z: b.z, vx: b.vx, vz: b.vz, type: b.type, charged: b.charged,
-      colour, core, trail, seenAt: performance.now(), samples: [],
+      owner: b.owner, colour, core, trail, seenAt: performance.now(), samples: [],
     };
   }
 
@@ -904,6 +935,77 @@ export class Game {
     const x = a.x + (b.x - a.x) * f;
     const z = a.z + (b.z - a.z) * f;
     return { x, z, dirX: b.x - a.x, dirZ: b.z - a.z };
+  }
+
+  /**
+   * Incoming-fire warning.
+   *
+   * Losing to bots that shoot from off-screen reads as "I died for no reason".
+   * Every frame we look for the enemy bolt whose closest approach to the local
+   * mech happens within ~0.55 s and inside ~1.2 m, and paint a red arc on the
+   * floor pointing at it. Being able to see the danger is enough to dodge.
+   */
+  updateThreat() {
+    const v = this.players.get(this.myId);
+    const self = this.selfData;
+    if (!v || !self || !self.alive || !this.running) { this.threat = null; this.drawThreat(); return; }
+    let best = null;
+    for (const b of this.bullets.values()) {
+      if (b.owner === this.myId || b.ghost || b.gone) continue;
+      const dx = b.x - v.x;
+      const dz = b.z - v.z;
+      const d = Math.hypot(dx, dz);
+      if (d > 14) continue;
+      const speed = Math.hypot(b.vx, b.vz) || BULLET.speed;
+      // how close does it come to us on its current heading?
+      const t = -(dx * b.vx + dz * b.vz) / (speed * speed);
+      if (t < -0.02 || t > 0.55) continue;
+      const px = dx + b.vx * t;
+      const pz = dz + b.vz * t;
+      const miss = Math.hypot(px, pz);
+      if (miss > 1.25) continue;
+      const score = t;
+      if (!best || score < best.score) {
+        best = {
+          score, t, miss,
+          angle: Math.atan2(b.z - v.z, b.x - v.x),
+          dist: d,
+        };
+      }
+    }
+    this.threat = best;
+    this.drawThreat();
+    if (best && this.time - (this.lastThreatSfxAt || -9) > 1.1) {
+      this.lastThreatSfxAt = this.time;
+      this.audio?.sfx('dash', { volume: 0.18 });
+    }
+  }
+
+  drawThreat() {
+    const v = this.players.get(this.myId);
+    if (!v) { if (this.threatArc) this.threatArc.visible = false; return; }
+    if (!this.threatArc) {
+      const geo = new THREE.RingGeometry(1.0, 1.28, 26, 1, -0.42, 0.84);
+      const mat = new THREE.MeshBasicMaterial({
+        color: '#ff3b2f', transparent: true, opacity: 0.85,
+        blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
+      });
+      this.threatArc = new THREE.Mesh(geo, mat);
+      this.threatArc.rotation.x = -Math.PI / 2;
+      this.threatArc.position.y = 0.06;
+      this.threatArc.visible = false;
+      this.scene.add(this.threatArc);
+    }
+    const arc = this.threatArc;
+    if (!this.threat || !v.alive) { arc.visible = false; return; }
+    arc.visible = true;
+    arc.position.set(v.x, 0.06, v.z);
+    arc.rotation.z = 0; // keep the x-rotation flat, orient with Y below
+    arc.rotation.y = -this.threat.angle;
+    const urgency = 1 - clamp(this.threat.t / 0.55, 0, 1);
+    arc.material.opacity = 0.45 + urgency * 0.5;
+    const s = 1 + urgency * 0.12;
+    arc.scale.set(s, s, s);
   }
 
   updateBullets(dt) {
@@ -1233,6 +1335,7 @@ export class Game {
     }
     this.updatePlayers(dt);
     this.updateBullets(dt);
+    this.updateThreat();
     this.updateItems(dt);
     this.updateMines(dt);
     this.updateGrenades(dt);
@@ -1280,14 +1383,94 @@ export class Game {
     if (this.mouse.down && can) {
       this.localFireHeld += dt;
       this.localCharge = clamp((this.localFireHeld - 0.1) / BULLET.chargeTime, 0, 1);
-      if (this.time - this.localShotAt > 0.33) {
-        this.localShotAt = this.time;
-        this.audio?.sfx('shot', { volume: 0.5, charged: this.localCharge > 0.9 });
-      }
+      this.tryLocalShot(s);
     } else {
       this.localFireHeld = 0;
       this.localCharge = 0;
+      this.localFireNextAt = Math.min(this.localFireNextAt, this.time);
     }
+    this.updateGhosts(dt);
+  }
+
+  /**
+   * Fire the *visual* bolt the moment the trigger is pulled.
+   *
+   * The authoritative bullet still comes from the server, so a shot at 120 ms
+   * latency used to appear on screen a sixth of a second after the click —
+   * players read that as "my bullets are laggy" and kept clicking. Here the
+   * muzzle flash, recoil, sound and a predicted tracer appear in the same
+   * frame; when the server's real bolt shows up it silently takes over.
+   */
+  tryLocalShot(s) {
+    if (!s || !s.alive) return;
+    if (this.time < this.localFireNextAt) return;
+    if (s.stunned) return;
+    const reloadLeft = s.reloading || 0;
+    if (reloadLeft > 0.02) return;
+    // predicted ammo: the snapshot lags, so trust the local count until the
+    // server sends a bigger number (a reload finished)
+    if (this.predAmmo == null || s.ammo > this.predAmmo) this.predAmmo = s.ammo ?? BULLET.magSize;
+    if (this.predAmmo <= 0) return;
+    const held = this.localFireHeld;
+    const charged = held >= BULLET.chargeTime && this.predAmmo >= 1;
+    this.predAmmo -= 1;
+    this.localFireNextAt = this.time + (charged ? BULLET.fireInterval * 1.35 : BULLET.fireInterval);
+    if (charged) this.localFireHeld = 0;
+    this.localShotAt = this.time;
+
+    const aim = this.localAim;
+    const v = this.players.get(this.myId);
+    const sx = v ? v.x : s.x;
+    const sz = v ? v.z : s.z;
+    const muzzle = { x: sx + Math.cos(aim) * 0.95, z: sz + Math.sin(aim) * 0.95 };
+    this.spawnGhost(muzzle.x, muzzle.z, aim, charged);
+    // the same feedback the other players get from the server's `shot` event
+    if (v && v.parts) {
+      v.parts.flashT = 0.07;
+      v.parts.recoil = 1;
+      const m = muzzleWorld(v.parts);
+      if (m) this.fx.muzzle(m.x, m.y, m.z, charged ? '#ffd27a' : '#9fe9ff');
+    }
+    this.audio?.sfx('shot', { volume: 0.55, charged });
+    this.shake(charged ? 0.18 : 0.1, sx, sz);
+  }
+
+  /** Predicted bolt: pure eye candy, never authoritative. */
+  spawnGhost(x, z, aim, charged) {
+    const g = this.makeBullet({ x, z, vx: Math.cos(aim) * (charged ? BULLET.chargedSpeed : BULLET.speed),
+      vz: Math.sin(aim) * (charged ? BULLET.chargedSpeed : BULLET.speed),
+      type: 'bolt', charged });
+    g.ghost = true;
+    g.dir = aim;
+    g.life = 0.55;
+    g.group.position.set(x, 0.95, z);
+    g.group.rotation.y = -aim;
+    this.ghosts.push(g);
+    return g;
+  }
+
+  updateGhosts(dt) {
+    if (!this.ghosts.length) return;
+    const speed = BULLET.speed;
+    for (let i = this.ghosts.length - 1; i >= 0; i--) {
+      const g = this.ghosts[i];
+      g.life -= dt;
+      const v = g.charged ? BULLET.chargedSpeed : speed;
+      g.x += Math.cos(g.dir) * v * dt;
+      g.z += Math.sin(g.dir) * v * dt;
+      g.group.position.set(g.x, 0.95, g.z);
+      if (g.life <= 0) {
+        this.removeBullet(g);
+        this.ghosts.splice(i, 1);
+      }
+    }
+  }
+
+  /** The server's real bolt arrived: drop the oldest predicted one. */
+  handOffGhost() {
+    if (!this.ghosts.length) return;
+    const g = this.ghosts.shift();
+    this.removeBullet(g);
   }
 
   /**
@@ -1435,6 +1618,9 @@ export class Game {
         alive: d.alive !== false, shield: d.shield || 0, stunned: d.stunned,
         showName: !isSelf,
         teamColor,
+        // your own mech gets the loudest facing cues
+        aimLine: isSelf ? 1 : 0.55,
+        isSelf,
       }, dt);
       // sniper aim line
       if (d.sniperCharge && d.alive) {

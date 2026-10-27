@@ -204,6 +204,61 @@ export function createMech(mechId, playerColor, playerName = '', opts = {}) {
     core2.userData.isCore = true;
   }
 
+  // ---------------------------------------------------------------- facing
+  // A 3D mech reads as a blob from the top-down camera: silhouette, ring and
+  // glow are all symmetric. These three cues make "which way is it looking"
+  // obvious at a glance: a bright chevron on the floor, a front arc on the
+  // ring, and a thin aim line on the ground.
+  const facingMat = new THREE.MeshBasicMaterial({
+    color, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending,
+    depthWrite: false, side: THREE.DoubleSide,
+  });
+  const chevronGeo = new THREE.BufferGeometry();
+  chevronGeo.setAttribute('position', new THREE.Float32BufferAttribute([
+    1.12, 0, 0, 0.42, 0, 0.46, 0.58, 0, 0,
+    0.42, 0, 0.46, 0.42, 0, -0.46, 0.58, 0,
+    0.42, 0, -0.46, 1.12, 0, 0, 0.58, 0,
+  ], 3));
+  chevronGeo.computeVertexNormals();
+  const chevron = new THREE.Mesh(chevronGeo, facingMat);
+  chevron.position.y = 0.05;
+  group.add(chevron);
+
+  const frontArc = new THREE.Mesh(
+    new THREE.RingGeometry(0.72, 0.9, 20, 1, -0.5, 1.0),
+    new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide })
+  );
+  frontArc.rotation.x = -Math.PI / 2;
+  frontArc.position.y = 0.045;
+  group.add(frontArc);
+
+  const aimLine = new THREE.Mesh(
+    new THREE.PlaneGeometry(3.2, 0.09),
+    new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.28, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide })
+  );
+  aimLine.rotation.x = -Math.PI / 2;
+  aimLine.position.set(0.6 + 1.6, 0.04, 0);
+  group.add(aimLine);
+
+  // small lamp at the very front of the cockpit, visible from above
+  // extra white ring so you can always find your own mech in a brawl
+  const selfRing = new THREE.Mesh(
+    new THREE.RingGeometry(0.95, 1.02, 32),
+    new THREE.MeshBasicMaterial({ color: '#ffffff', transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide })
+  );
+  selfRing.rotation.x = -Math.PI / 2;
+  selfRing.position.y = 0.05;
+  selfRing.visible = false;
+  group.add(selfRing);
+
+  const frontLamp = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: glowTexture(), color, transparent: true, opacity: 0.85,
+    blending: THREE.AdditiveBlending, depthWrite: false,
+  }));
+  frontLamp.scale.set(0.9, 0.9, 1);
+  frontLamp.position.set(0.5, 1.05, 0);
+  group.add(frontLamp);
+
   // colored ground ring
   const ringMat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.8, blending: THREE.AdditiveBlending, depthWrite: false });
   const ringMesh = new THREE.Mesh(new THREE.RingGeometry(0.55, 0.68, 28), ringMat);
@@ -244,6 +299,7 @@ export function createMech(mechId, playerColor, playerName = '', opts = {}) {
   const parts = {
     group, pelvis, torso, head, legs, gun, muzzle, weapon, leftArm, core, visor,
     ring: ringMesh, ringMat, glow, flash, shield, shieldMat, nameSprite,
+    chevron, frontArc, aimLine, frontLamp, facingMat, selfRing,
     hullMat, trimMat, darkMat, accentMat, playerMat, coreMat, visorMat, backLight,
     shape: mech.shape, mech, color,
     walkPhase: Math.random() * 10, recoil: 0, flashT: 0, heat: 0, dead: false,
@@ -291,6 +347,30 @@ export function updateMech(parts, look, dt) {
   p.backLight.intensity = 0.4 + hk * 1.6;
   p.ringMat.opacity = 0.5 + hk * 0.5;
   p.ringMat.color.copy(p.color).lerp(new THREE.Color('#ff4020'), hk * 0.7);
+  // facing cues: pulse the chevron a little so a still mech still reads
+  const aimPulse = 0.72 + Math.sin(t * 3.2) * 0.1;
+  if (p.chevron) {
+    p.chevron.material.color.copy(p.color).lerp(new THREE.Color('#ff4020'), hk * 0.5);
+    p.chevron.material.opacity = (look.aimLine ?? 0.55) * aimPulse;
+    p.chevron.visible = look.alive !== false;
+  }
+  if (p.frontArc) {
+    p.frontArc.material.color.copy(p.color).lerp(new THREE.Color('#ff4020'), hk * 0.5);
+    p.frontArc.material.opacity = (look.aimLine ?? 0.55) * aimPulse;
+    p.frontArc.visible = look.alive !== false;
+  }
+  if (p.aimLine) {
+    p.aimLine.material.color.copy(p.color);
+    p.aimLine.material.opacity = (look.aimLine ?? 0.55) * 0.34;
+    p.aimLine.scale.x = look.isSelf ? 1.5 : 1;
+    p.aimLine.position.x = 0.6 + 1.6 * (look.isSelf ? 1.5 : 1);
+    p.aimLine.visible = look.alive !== false;
+  }
+  if (p.selfRing) {
+    p.selfRing.visible = !!look.isSelf && look.alive !== false;
+    p.selfRing.material.opacity = 0.35 + Math.sin(t * 2.4) * 0.1;
+  }
+  if (p.frontLamp) p.frontLamp.material.opacity = 0.55 + hk * 0.35;
   p.glow.material.opacity = 0.18 + hk * 0.25;
   if (p.glow.material.color) p.glow.material.color.copy(p.color).lerp(new THREE.Color('#ff4020'), hk * 0.7);
   // shield

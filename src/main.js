@@ -456,7 +456,7 @@ function startQuickplay() {
     type: 'createRoom',
     autoStart: true,
     profile,
-    settings: { mode: 'ffa', bots: 3, eventRate: 'med', heatRate: 'standard', difficulty: 'normal', mapSize: 'auto' },
+    settings: { mode: 'ffa', bots: 3, eventRate: 'med', heatRate: 'standard', difficulty: 'easy', mapSize: 'auto' },
   });
   ui.toast('正在接线 · 一场混战即将开始');
   reportClient('quickplay-sent');

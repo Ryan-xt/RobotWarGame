@@ -258,8 +258,14 @@ export class Room {
           return;
         }
       }
-      const interval = 1 / 20;
-      if (sim.t - this.lastSnapshotAt >= interval || sim.tick < 3) {
+      // Small matches (the quickplay case) get 30 snapshots per second: at
+      // 4 players the payload is tiny and the extra frames cut the delay
+      // between "server fired" and "I see my bullet" by ~17 ms.
+      const interval = 1 / (this.sim.order.length <= 4 ? 30 : 20);
+      // epsilon: the sim advances in exact 1/60 s steps, so a 2-step gap is
+      // 0.03333… and comparing it against 1/30 can tip the wrong way and cost
+      // a whole extra step (20 Hz instead of 30 Hz).
+      if (sim.t - this.lastSnapshotAt >= interval - 0.002 || sim.tick < 3) {
         this.lastSnapshotAt = sim.t;
         const snap = sim.snapshot();
         for (const m of this.members.values()) {

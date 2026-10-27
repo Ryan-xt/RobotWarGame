@@ -158,6 +158,7 @@ export class UI {
       };
     };
     tap('btn-quick', () => h.onQuick?.());
+    tap('btn-hud-help', () => this.openModal('modal-help'));
     tap('btn-tutorial', () => h.onTutorial?.());
     tap('btn-tut-skip', () => h.onTutorialSkip?.());
     tap('btn-tut-exit', () => h.onTutorialExit?.());
@@ -505,7 +506,7 @@ export class UI {
     $('death-overlay').classList.add('hidden');
     $('countdown').classList.remove('hidden');
     $('tutorial').classList.toggle('hidden', !this.settings.hints);
-    this.tutorialTimer = 14;
+    this.tutorialTimer = 26;
     $('event-banner').classList.add('hidden');
     $('killfeed').innerHTML = '';
     $('chat-mini').innerHTML = '';

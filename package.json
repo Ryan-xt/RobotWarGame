@@ -18,7 +18,8 @@
     "perf": "node scripts/perftest.js",
     "tutorialtest": "node scripts/tutorialtest.js",
     "bulletmotion": "node scripts/bulletmotion.js",
-    "balance": "node scripts/balancetest.js"
+    "balance": "node scripts/balancetest.js",
+    "feel": "node scripts/feeltest.js"
   },
   "dependencies": {
     "three": "0.186.1",
